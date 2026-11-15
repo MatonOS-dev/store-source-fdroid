@@ -1,6 +1,6 @@
 # F-Droid store source
 
-`org.matonos.store.fdroid` is a Java-only, API 37+ backend for the MatonOS Software Center. It has no activity or installer privilege. Its exported service requires the store's signature bind permission and implements the typed AIDL contract in `store-sources/contract/` (SOURCE-PLUGINS.md). `info()` reports the contract version/revision and the F-Droid repository, anti-feature and permission capabilities. Reviews throw `UnsupportedOperationException`.
+`org.matonos.store.fdroid` is a Java-only, API 37+ backend for the MatonOS Software Center. It has no activity or installer privilege. Its exported service requires the store's signature bind permission and implements the typed AIDL contract in the `contract/` submodule ([store-source-contract](https://github.com/MatonOS-dev/store-source-contract), SOURCE-PLUGINS.md); clone with `--recurse-submodules`. `info()` reports the contract version/revision and the F-Droid repository, anti-feature and permission capabilities. Reviews throw `UnsupportedOperationException`.
 
 The original Java index client, repository validation, JSON reader, SHA-256 verifier and host test moved from the store module. Repository preferences and installed-package signer/version inspection were ported from Kotlin to Java. All 17 preset URLs and signing fingerprints are preserved, as is the official fingerprint. Presets seed once; the official repository cannot be removed. Additions require a signing fingerprint in the share URL. Failed verification leaves the repository visibly broken and logs the cause; removing a preset keeps it removed.
 
@@ -23,7 +23,7 @@ The staged `buildinfra/apps-built/FdroidSource.apk` is imported by `apps/Android
 
 ## Verification
 
-- `bash store-sources/fdroid/test-host.sh`: signed JAR and tampering, signer pin, index hash, split file parsing, SHA-256 rejection, update signer/version eligibility, URL/fingerprint validation, compatible version choice, safety mapping, base/split manifest validation, repo-specific candidate identity and selection, and paging.
+- `bash test-host.sh`: signed JAR and tampering, signer pin, index hash, split file parsing, SHA-256 rejection, update signer/version eligibility, URL/fingerprint validation, compatible version choice, safety mapping, base/split manifest validation, repo-specific candidate identity and selection, and paging.
 - Gradle `assembleDebug` assembles the typed AIDL-backed APK.
 - In `rn-apps/flathub`: `npx tsc --noEmit -p .` and `npx eslint src`.
 - Store signed release build and release linkage check passed; the final store module compiled. Preflight passed all six checks with the host bpfmt on PATH and read-only links to existing unrelated prebuilts in this isolated worktree.
