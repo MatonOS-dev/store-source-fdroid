@@ -87,9 +87,10 @@ public final class FdroidIndexClient {
     if (name.equals(needle)) return 0;
     if (name.startsWith(needle)) return 1;
     if (containsNameWord(name, needle)) return 2;
-    if (id.contains(needle)) return 3;
-    if (summary.contains(needle)) return 4;
-    if (description.contains(needle)) return 5;
+    if (name.contains(needle)) return 3;
+    if (id.contains(needle)) return 4;
+    if (summary.contains(needle)) return 5;
+    if (description.contains(needle)) return 6;
     return Integer.MAX_VALUE;
   }
 
