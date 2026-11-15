@@ -66,10 +66,40 @@ public final class FdroidIndexClient {
     List<Map<String, Object>> apps = new ArrayList<>();
     for (Map.Entry<?, ?> entry : ((Map<?, ?>) packagesValue).entrySet()) {
       Map<String, Object> app = map(entry.getValue());
-      if (app != null && (needle.isEmpty() || (text(app.get("name")) + " " + text(app.get("summary")) + " " + text(app.get("id"))).toLowerCase(Locale.ROOT).contains(needle))) apps.add(app);
+      if (app != null && (needle.isEmpty() || searchRank(app, needle) < Integer.MAX_VALUE)) apps.add(app);
     }
-    apps.sort(Comparator.comparing(a -> text(a.get("name")).toLowerCase(Locale.ROOT)));
+    apps.sort(searchComparator(needle));
     return apps;
+  }
+
+  static Comparator<Map<String, Object>> searchComparator(String needle) {
+    return Comparator.comparingInt((Map<String, Object> app) -> searchRank(app, needle))
+        .thenComparing(a -> text(a.get("name")).toLowerCase(Locale.ROOT))
+        .thenComparing(a -> text(a.get("id")).toLowerCase(Locale.ROOT));
+  }
+
+  private static int searchRank(Map<String, Object> app, String needle) {
+    if (needle.isEmpty()) return 0;
+    String name = text(app.get("name")).toLowerCase(Locale.ROOT);
+    String id = text(app.get("id")).toLowerCase(Locale.ROOT);
+    String summary = text(app.get("summary")).toLowerCase(Locale.ROOT);
+    String description = text(app.get("description")).toLowerCase(Locale.ROOT);
+    if (name.equals(needle)) return 0;
+    if (name.startsWith(needle)) return 1;
+    if (containsNameWord(name, needle)) return 2;
+    if (id.contains(needle)) return 3;
+    if (summary.contains(needle)) return 4;
+    if (description.contains(needle)) return 5;
+    return Integer.MAX_VALUE;
+  }
+
+  private static boolean containsNameWord(String name, String needle) {
+    int from = 0;
+    while ((from = name.indexOf(needle, from)) >= 0) {
+      if (from == 0 || !Character.isLetterOrDigit(name.charAt(from - 1))) return true;
+      from++;
+    }
+    return false;
   }
 
   public Map<String, Object> details(File cacheRoot, String repository, String packageName) throws Exception {

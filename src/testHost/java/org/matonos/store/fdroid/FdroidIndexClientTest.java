@@ -47,6 +47,7 @@ public final class FdroidIndexClientTest {
     testUpdateEligibility(client, parsed);
     testRepositoryChanges();
     testCompatibility();
+    testSearchRanking();
     testSafety();
     testManifest(signedJar.getParentFile());
     testTypedCatalogContract();
@@ -54,6 +55,30 @@ public final class FdroidIndexClientTest {
     testHttpCatalogueCache(signedJar, certFile, new File(args[2]), new File(args[3]), new File(args[4]));
     testOperationTable();
     System.out.println("PASS: signed JAR, signer pin, index hash, index parser, APK hash before commit, update signer/version checks, repository trust/removal");
+  }
+
+  private static void testSearchRanking() {
+    java.util.Map<String,Object> bendy = new java.util.LinkedHashMap<>();
+    bendy.put("id", "com.example.bendystraw"); bendy.put("name", "BendyStraw");
+    bendy.put("summary", "An app for managing NewPipe databases");
+    java.util.Map<String,Object> newpipe = new java.util.LinkedHashMap<>();
+    newpipe.put("id", "org.schabi.newpipe"); newpipe.put("name", "NewPipe");
+    newpipe.put("summary", "A video player");
+    java.util.Map<String,Object> prefix = new java.util.LinkedHashMap<>();
+    prefix.put("id", "org.example.newpipe.fork"); prefix.put("name", "NewPipe Fork");
+    java.util.Map<String,Object> idMatch = new java.util.LinkedHashMap<>();
+    idMatch.put("id", "org.example.newpipe.extra"); idMatch.put("name", "Other App");
+    java.util.List<java.util.Map<String,Object>> results = new java.util.ArrayList<>(java.util.List.of(bendy, idMatch, prefix, newpipe));
+    results.sort(FdroidIndexClient.searchComparator("newpipe"));
+    check(results.equals(java.util.List.of(newpipe, prefix, idMatch, bendy)),
+        "NewPipe exact name precedes prefix, summary-only BendyStraw, and package ID match");
+    check(results.subList(0, 2).equals(java.util.List.of(newpipe, prefix))
+        && results.subList(2, 4).equals(java.util.List.of(idMatch, bendy)),
+        "search ranking stays fixed across offset pages");
+    java.util.Map<String,Object> word = new java.util.LinkedHashMap<>();
+    word.put("id", "org.example.other"); word.put("name", "Player NewPipe Edition");
+    check(FdroidIndexClient.searchComparator("newpipe").compare(word, idMatch) < 0,
+        "name word match precedes summary match");
   }
   private static void testLargeStreamingIndex(File file) throws Exception {
     check(file.length() >= 100L * 1024 * 1024, "synthetic index is at least 100 MiB");
