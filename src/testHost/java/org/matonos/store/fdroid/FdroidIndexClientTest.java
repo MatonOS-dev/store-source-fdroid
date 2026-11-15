@@ -12,6 +12,12 @@ import java.util.Locale;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
+import com.sun.net.httpserver.HttpServer;
+import java.net.InetSocketAddress;
+import java.nio.file.Files;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public final class FdroidIndexClientTest {
   public static void main(String[] args) throws Exception {
@@ -44,7 +50,71 @@ public final class FdroidIndexClientTest {
     testManifest(signedJar.getParentFile());
     testTypedCatalogContract();
     testParallelRepoOrderAndPageCache();
+    testHttpCatalogueCache(signedJar, certFile, new File(args[2]), new File(args[3]), new File(args[4]));
+    testOperationTable();
     System.out.println("PASS: signed JAR, signer pin, index hash, index parser, APK hash before commit, update signer/version checks, repository trust/removal");
+  }
+
+  private static void testOperationTable() throws Exception {
+    OperationTable table = new OperationTable();
+    check(!table.running("unknown"), "unknown operation is not running");
+    table.start("slow"); check(table.running("slow"), "operation running while work is in progress");
+    table.finish("slow"); check(!table.running("slow"), "operation stops after done");
+    table.start("failed"); table.finish("failed"); check(!table.running("failed"), "failed operation is not running");
+    table.start("cancelled"); table.finish("cancelled"); check(!table.running("cancelled"), "cancelled operation is not running");
+  }
+
+  private static void testHttpCatalogueCache(File entryJar, File cert, File indexFile, File changedJar, File changedIndex) throws Exception {
+    String signer = fingerprint(bytes(cert));
+    byte[] firstJar = bytes(entryJar), secondJar = bytes(changedJar), firstIndex = bytes(indexFile), secondIndex = bytes(changedIndex);
+    AtomicInteger entryRequests = new AtomicInteger(), indexRequests = new AtomicInteger();
+    java.util.concurrent.atomic.AtomicReference<Boolean> changed = new java.util.concurrent.atomic.AtomicReference<>(false);
+    HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext("/repo/entry.jar", exchange -> {
+      entryRequests.incrementAndGet();
+      String currentEtag = changed.get() ? "\"v2\"" : "\"v1\"";
+      if (currentEtag.equals(exchange.getRequestHeaders().getFirst("If-None-Match"))) {
+        exchange.sendResponseHeaders(304, -1); exchange.close(); return;
+      }
+      byte[] body = changed.get() ? secondJar : firstJar;
+      exchange.getResponseHeaders().add("ETag", changed.get() ? "\"v2\"" : "\"v1\"");
+      if (entryRequests.get() == 1) try { Thread.sleep(350); } catch (InterruptedException error) { Thread.currentThread().interrupt(); }
+      exchange.sendResponseHeaders(200, body.length); exchange.getResponseBody().write(body); exchange.close();
+    });
+    server.createContext("/repo/index-v2.json", exchange -> {
+      indexRequests.incrementAndGet(); byte[] body = changed.get() ? secondIndex : firstIndex;
+      exchange.sendResponseHeaders(200, body.length); exchange.getResponseBody().write(body); exchange.close();
+    });
+    server.start();
+    File cache = Files.createTempDirectory("fdroid-cache-test").toFile();
+    String repo = "http://127.0.0.1:" + server.getAddress().getPort() + "/repo";
+    try {
+      FdroidIndexClient client = new FdroidIndexClient();
+      java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+      CountDownLatch start = new CountDownLatch(1);
+      try {
+        java.util.concurrent.Future<?> a = pool.submit(() -> { try { start.await(); client.search(cache, repo, signer, ""); } catch (Exception e) { throw new RuntimeException(e); } });
+        java.util.concurrent.Future<?> b = pool.submit(() -> { try { start.await(); client.search(cache, repo, signer, ""); } catch (Exception e) { throw new RuntimeException(e); } });
+        start.countDown(); a.get(); b.get();
+      } finally { pool.shutdownNow(); }
+      check(entryRequests.get() == 1 && indexRequests.get() == 1, "concurrent loads share one entry and index download");
+      int parses = client.parseCountForTest();
+      client.search(cache, repo, signer, "");
+      check(entryRequests.get() == 2 && indexRequests.get() == 1, "304 retains verified index without downloading it");
+      check(client.parseCountForTest() == parses, "304 keeps parsed catalogue without reparsing");
+      changed.set(true);
+      client.search(cache, repo, signer, "");
+      check(indexRequests.get() == 2, "changed entry index hash downloads replacement index");
+      check(client.parseCountForTest() == parses + 2, "changed hash reparses entry and catalogue");
+      FdroidIndexClient cold = new FdroidIndexClient();
+      // A fresh client with a 304 must recover the verified catalogue from disk.
+      cold.search(cache, repo, signer, "");
+      check(cold.parseCountForTest() == 1, "cold 304 parses verified index from disk");
+    } finally {
+      server.stop(0);
+      File[] files = cache.listFiles(); if (files != null) for (File file : files) { File[] nested=file.listFiles(); if(nested!=null)for(File child:nested)child.delete(); file.delete(); }
+      cache.delete();
+    }
   }
 
   private static void testParallelRepoOrderAndPageCache() throws Exception {

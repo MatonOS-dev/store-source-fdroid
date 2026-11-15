@@ -23,6 +23,7 @@ public final class FdroidSourceService extends Service {
   private FdroidRepositories repositories;
   private FdroidIndexClient client;
   private final Map<String, InstallTask> installs = new ConcurrentHashMap<>();
+  private final OperationTable operations = new OperationTable();
   private final Map<String, List<Map<String,Object>>> queryResults = new ConcurrentHashMap<>();
   private final ExecutorService repoQueries = Executors.newCachedThreadPool();
 
@@ -79,6 +80,7 @@ public final class FdroidSourceService extends Service {
       if (callback == null) throw new IllegalArgumentException("Install callback required");
       InstallTask task = new InstallTask(id, repo, op, callback);
       if (installs.putIfAbsent(op, task) != null) throw new IllegalArgumentException("Operation already running: " + op);
+      operations.start(op);
       task.thread = new Thread(() -> prepare(task), "fdroid-install"); task.thread.start();
     }
     @Override public void cancel(String op) {
@@ -90,6 +92,7 @@ public final class FdroidSourceService extends Service {
       Thread thread = task.thread;
       if (thread != null) thread.interrupt();
     }
+    @Override public boolean running(String op) { return operations.running(op); }
   };
   @Override public IBinder onBind(Intent intent) { return binder; }
 
@@ -205,8 +208,8 @@ public final class FdroidSourceService extends Service {
         new FdroidApkInstaller().verify(target,text(file.get("sha256"))); String name=ApkManifest.sessionName(target,task.id); if(names.contains(name))throw new IllegalArgumentException("Duplicate APK split "+name); names.add(name); descriptors.add(ParcelFileDescriptor.open(target,ParcelFileDescriptor.MODE_READ_ONLY)); }
       ensureActive(task); if(!names.contains("base.apk"))throw new IllegalArgumentException("F-Droid package has no base APK"); task.callback.progress(task.op,"Verified APKs",100,0,0);
       task.callback.commit(task.op,task.id,names.toArray(new String[0]),descriptors.toArray(new ParcelFileDescriptor[0]),new String[0],new ICommitResult.Stub(){@Override public void result(boolean ok,String error){
-        if(!task.terminal.compareAndSet(false,true)){Log.e(TAG,"Duplicate commit result op="+task.op);return;} installs.remove(task.op,task);
-        try{if(task.cancelled.get())task.callback.failed(task.op,"cancelled");else if(ok)task.callback.done(task.op);else{Log.e(TAG,"Commit failed op="+task.op+" package="+task.id+": "+error);task.callback.failed(task.op,error);}}catch(RemoteException gone){Log.e(TAG,"Delivering terminal result op="+task.op+" failed",gone);}
+        if(!task.terminal.compareAndSet(false,true)){Log.e(TAG,"Duplicate commit result op="+task.op);return;}
+        try{if(task.cancelled.get())task.callback.failed(task.op,"cancelled");else if(ok)task.callback.done(task.op);else{Log.e(TAG,"Commit failed op="+task.op+" package="+task.id+": "+error);task.callback.failed(task.op,error);}}catch(RemoteException gone){Log.e(TAG,"Delivering terminal result op="+task.op+" failed",gone);}finally{operations.finish(task.op);installs.remove(task.op,task);}
       }});
     } catch(Exception error) {
       String message=task.cancelled.get()?"cancelled":text(error.getMessage()); if(!task.cancelled.get())Log.e(TAG,"Install op="+task.op+" package="+task.id+" failed",error);
@@ -217,7 +220,7 @@ public final class FdroidSourceService extends Service {
       if(task.terminal.get())installs.remove(task.op,task);
     }
   }
-  private void finishFailed(InstallTask task,String error){ if(task.terminal.compareAndSet(false,true)){installs.remove(task.op,task);try{task.callback.failed(task.op,error);}catch(RemoteException gone){Log.e(TAG,"Reporting failed install op="+task.op,gone);}} }
+  private void finishFailed(InstallTask task,String error){ if(task.terminal.compareAndSet(false,true)){try{task.callback.failed(task.op,error);}catch(RemoteException gone){Log.e(TAG,"Reporting failed install op="+task.op,gone);}finally{operations.finish(task.op);installs.remove(task.op,task);}} }
   private void ensureActive(InstallTask task) throws IOException { if(task.cancelled.get()||Thread.currentThread().isInterrupted())throw new IOException("cancelled"); }
   private void download(String repo,String path,File destination,InstallTask task,int index,int count)throws Exception{
     ensureActive(task);String name=path.replaceFirst("^/+","");if(Arrays.asList(name.split("/")).contains(".."))throw new IllegalArgumentException("Invalid APK path "+path);

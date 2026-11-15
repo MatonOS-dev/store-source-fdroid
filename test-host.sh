@@ -6,7 +6,11 @@ TEST="$ROOT/src/testHost/java/org/matonos/store/fdroid"
 TMP=$(mktemp -d "${MATON_TEST_TMPDIR:-${TMPDIR:-/tmp}}/fdroid-host.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/classes" "$TMP/payload"
-printf '{"timestamp":1}' > "$TMP/payload/entry.json"
+cat > "$TMP/index-v2.json" <<'EOF'
+{"packages":{}}
+EOF
+INDEX_HASH=$(sha256sum "$TMP/index-v2.json" | cut -d' ' -f1)
+printf '{"index":{"sha256":"%s"}}' "$INDEX_HASH" > "$TMP/payload/entry.json"
 keytool -genkeypair -alias fixture -keyalg RSA -keysize 2048 -validity 2 \
   -dname 'CN=F-Droid host test' -storetype PKCS12 -keystore "$TMP/test.p12" \
   -storepass changeit -keypass changeit -noprompt >/dev/null 2>&1
@@ -20,5 +24,11 @@ for kind in base split; do
   printf '<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.example.demo" %s android:versionCode="1"><uses-sdk android:minSdkVersion="37"/><application/></manifest>' "$split_attr" > "$TMP/AndroidManifest.xml"
   "$AAPT2" link --manifest "$TMP/AndroidManifest.xml" -I "$SDK/platforms/android-37.0/android.jar" -o "$TMP/$kind.apk"
 done
-javac -d "$TMP/classes" "$SRC/Json.java" "$SRC/FdroidCatalog.java" "$SRC/FdroidRepository.java" "$SRC/FdroidIndexClient.java" "$SRC/FdroidApkInstaller.java" "$SRC/FdroidSafety.java" "$SRC/ApkManifest.java" "$TEST/FdroidIndexClientTest.java"
-java -cp "$TMP/classes" org.matonos.store.fdroid.FdroidIndexClientTest "$TMP/entry.jar" "$TMP/cert.der"
+javac -d "$TMP/classes" "$SRC/Json.java" "$SRC/FdroidCatalog.java" "$SRC/FdroidRepository.java" "$SRC/FdroidIndexClient.java" "$SRC/OperationTable.java" "$SRC/FdroidApkInstaller.java" "$SRC/FdroidSafety.java" "$SRC/ApkManifest.java" "$TEST/FdroidIndexClientTest.java"
+mkdir -p "$TMP/payload2"
+printf '{"packages":{},"changed":true}\n' > "$TMP/index-v2-changed.json"
+CHANGED_HASH=$(sha256sum "$TMP/index-v2-changed.json" | cut -d' ' -f1)
+printf '{"index":{"sha256":"%s"}}' "$CHANGED_HASH" > "$TMP/payload2/entry.json"
+jar --create --file "$TMP/entry-changed.jar" -C "$TMP/payload2" .
+jarsigner -keystore "$TMP/test.p12" -storepass changeit -keypass changeit "$TMP/entry-changed.jar" fixture >/dev/null
+java -cp "$TMP/classes" org.matonos.store.fdroid.FdroidIndexClientTest "$TMP/entry.jar" "$TMP/cert.der" "$TMP/index-v2.json" "$TMP/entry-changed.jar" "$TMP/index-v2-changed.json"
