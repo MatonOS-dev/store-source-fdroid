@@ -5,6 +5,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.MessageDigest;
@@ -63,7 +65,7 @@ public final class FdroidIndexClient {
     String needle = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
     List<Map<String, Object>> apps = new ArrayList<>();
     for (Map.Entry<?, ?> entry : ((Map<?, ?>) packagesValue).entrySet()) {
-      Map<String, Object> app = app(String.valueOf(entry.getKey()), map(entry.getValue()));
+      Map<String, Object> app = map(entry.getValue());
       if (app != null && (needle.isEmpty() || (text(app.get("name")) + " " + text(app.get("summary")) + " " + text(app.get("id"))).toLowerCase(Locale.ROOT).contains(needle))) apps.add(app);
     }
     apps.sort(Comparator.comparing(a -> text(a.get("name")).toLowerCase(Locale.ROOT)));
@@ -76,7 +78,7 @@ public final class FdroidIndexClient {
 
   public Map<String, Object> details(File cacheRoot, String repository, String fingerprint, String packageName) throws Exception {
     Map<String, Object> packages = map(load(cacheRoot, repository, fingerprint).get("packages"));
-    return app(packageName, map(packages.get(packageName)));
+    return map(packages.get(packageName)).isEmpty() ? null : map(packages.get(packageName));
   }
 
   public List<Map<String, Object>> installedCatalogue(File cacheRoot, String repository, List<String> installedPackages) throws Exception {
@@ -87,7 +89,7 @@ public final class FdroidIndexClient {
     Map<String, Object> packages = map(load(cacheRoot, repository, fingerprint).get("packages"));
     List<Map<String, Object>> installed = new ArrayList<>();
     for (String packageName : installedPackages) {
-      Map<String, Object> value = app(packageName, map(packages.get(packageName)));
+      Map<String, Object> value = map(packages.get(packageName));
       if (value != null) installed.add(value);
     }
     installed.sort(Comparator.comparing(a -> text(a.get("name")).toLowerCase(Locale.ROOT)));
@@ -107,7 +109,8 @@ public final class FdroidIndexClient {
     List<Map<String, Object>> updates = new ArrayList<>();
     for (Map<String, Object> installed : installedPackages) {
       String packageName = text(installed.get("packageName"));
-      Map<String, Object> app = app(packageName, map(catalogue.get(packageName)));
+      Map<String, Object> stored = map(catalogue.get(packageName));
+      Map<String, Object> app = stored.containsKey("packageName") ? stored : app(packageName, stored);
       if (app == null || number(app.get("versionCode")) <= number(installed.get("versionCode"))) continue;
       if (!sameSigners(strings(installed.get("signerSha256")), strings(app.get("signerSha256")))) continue;
       updates.add(app);
@@ -121,6 +124,16 @@ public final class FdroidIndexClient {
     Object parsed = Json.parse(json);
     if (!(parsed instanceof Map)) throw new IllegalArgumentException("F-Droid index is not an object");
     return cast(parsed);
+  }
+
+  Map<String,Object> parseCatalogueForTest(File file) throws Exception { return parseCatalogue(file); }
+  private Map<String,Object> parseCatalogue(File file) throws Exception {
+    synchronized (this) { parseCount++; }
+    Map<String,Object> packages = new LinkedHashMap<>();
+    try (Reader reader = new InputStreamReader(new java.io.FileInputStream(file), "UTF-8")) {
+      JsonStream.packages(reader, (id, raw) -> { Map<String,Object> value = app(id, raw); if (value != null) packages.put(id, value); });
+    }
+    return Collections.singletonMap("packages", packages);
   }
 
   Map<String, Object> detailsFromParsedIndex(Map<String, Object> index, String packageName) {
@@ -184,9 +197,7 @@ public final class FdroidIndexClient {
       Map<String, Object> cached = catalogues.get(key);
       if (cached != null) return cached;
       if (!indexFile.isFile()) throw new IllegalStateException("F-Droid returned 304 without cached index for " + repo);
-      byte[] disk;
-      try (InputStream input = new java.io.FileInputStream(indexFile)) { disk = readAll(input); }
-      Map<String,Object> parsed = parseIndex(new String(disk, "UTF-8")); catalogues.put(key, parsed); return parsed;
+      Map<String,Object> parsed = parseCatalogue(indexFile); catalogues.put(key, parsed); return parsed;
     }
     if (status < 200 || status >= 300) { response.disconnect(); throw new IllegalStateException("F-Droid returned HTTP " + status + " for " + repo + "/entry.jar"); }
     byte[] entryJar;
@@ -200,19 +211,22 @@ public final class FdroidIndexClient {
     String expectedHash = text(indexInfo.get("sha256"));
     if (expectedHash.isEmpty()) throw new IllegalArgumentException("F-Droid entry has no index hash");
     if (indexFile.isFile()) {
-      byte[] cached;
-      try (InputStream input = new java.io.FileInputStream(indexFile)) { cached = readAll(input); }
-      if (fingerprint(cached).equals(normalizeFingerprint(expectedHash))) {
+      if (fingerprint(indexFile).equals(normalizeFingerprint(expectedHash))) {
         Map<String,Object> current=catalogues.get(key);
-        if (current == null) { current=parseIndex(new String(cached, "UTF-8")); catalogues.put(key, current); }
+        if (current == null) { current=parseCatalogue(indexFile); catalogues.put(key, current); }
         storeValidators(repoCache, key, fresh); return current;
       }
     }
-    byte[] index = download(repo + "/index-v2.json");
-    verifyIndexHash(index, expectedHash);
     if (!repoCache.exists() && !repoCache.mkdirs()) throw new IllegalStateException("Cannot create F-Droid cache");
-    try (FileOutputStream output = new FileOutputStream(indexFile)) { output.write(index); }
-    Map<String,Object> parsed=parseIndex(new String(index, "UTF-8")); catalogues.put(key, parsed);
+    File temporary = File.createTempFile("index-v2-", ".tmp", repoCache);
+    try {
+      String downloadedHash = download(repo + "/index-v2.json", temporary);
+      if (!downloadedHash.equals(normalizeFingerprint(expectedHash))) throw new SecurityException("F-Droid index SHA-256 mismatch");
+      Map<String,Object> parsed=parseCatalogue(temporary);
+      if (!temporary.renameTo(indexFile)) throw new java.io.IOException("Cannot atomically replace F-Droid index cache");
+      catalogues.put(key, parsed);
+    } finally { if (temporary.exists() && !temporary.delete()) throw new java.io.IOException("Cannot delete temporary F-Droid index " + temporary); }
+    Map<String,Object> parsed=catalogues.get(key);
     storeValidators(repoCache, key, fresh); return parsed;
     }
   }
@@ -243,13 +257,19 @@ public final class FdroidIndexClient {
     throw new IllegalArgumentException("F-Droid entry JAR does not contain entry.json");
   }
 
-  private byte[] download(String address) throws Exception {
+  private String download(String address, File destination) throws Exception {
     HttpURLConnection connection = request(address, null);
     connection.setConnectTimeout(20000); connection.setReadTimeout(60000); connection.setInstanceFollowRedirects(true);
     connection.setRequestProperty("User-Agent", "MatonOS-Software-Center/1.0");
     try {
       if (connection.getResponseCode() < 200 || connection.getResponseCode() >= 300) throw new IllegalStateException("F-Droid returned HTTP " + connection.getResponseCode());
-      try (InputStream input = connection.getInputStream()) { return readAll(input); }
+      MessageDigest digest = MessageDigest.getInstance("SHA-256");
+      try (InputStream input = connection.getInputStream(); FileOutputStream output = new FileOutputStream(destination)) {
+        byte[] buffer = new byte[32768]; int count;
+        while ((count = input.read(buffer)) != -1) { output.write(buffer, 0, count); digest.update(buffer, 0, count); }
+        output.getFD().sync();
+      }
+      StringBuilder hash = new StringBuilder(); for (byte b : digest.digest()) hash.append(String.format(Locale.ROOT, "%02x", b & 0xff)); return hash.toString();
     } finally { connection.disconnect(); }
   }
   private HttpURLConnection request(String address,String[] conditions) throws Exception {
@@ -351,6 +371,11 @@ public final class FdroidIndexClient {
   private static String fingerprint(byte[] bytes) throws Exception {
     byte[] hash = MessageDigest.getInstance("SHA-256").digest(bytes); StringBuilder out = new StringBuilder();
     for (byte b : hash) out.append(String.format(Locale.ROOT, "%02x", b & 0xff)); return out.toString();
+  }
+  private static String fingerprint(File file) throws Exception {
+    MessageDigest digest = MessageDigest.getInstance("SHA-256");
+    try (InputStream input = new java.io.FileInputStream(file)) { byte[] buffer = new byte[32768]; int n; while ((n=input.read(buffer))!=-1) digest.update(buffer,0,n); }
+    StringBuilder out = new StringBuilder(); for (byte b : digest.digest()) out.append(String.format(Locale.ROOT, "%02x", b & 0xff)); return out.toString();
   }
   private static byte[] readAll(InputStream input) throws Exception {
     ByteArrayOutputStream output = new ByteArrayOutputStream(); byte[] buffer = new byte[16384]; int read;

@@ -32,7 +32,7 @@ for kind in base split; do
   printf '<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.example.demo" %s android:versionCode="1"><uses-sdk android:minSdkVersion="37"/><application/></manifest>' "$split_attr" > "$TMP/AndroidManifest.xml"
   "$AAPT2" link --manifest "$TMP/AndroidManifest.xml" -I "$SDK/platforms/android-37.0/android.jar" -o "$TMP/$kind.apk"
 done
-javac -d "$TMP/classes" "$SRC/Json.java" "$SRC/FdroidCatalog.java" "$SRC/FdroidRepository.java" "$SRC/FdroidIndexClient.java" "$SRC/OperationTable.java" "$SRC/FdroidApkInstaller.java" "$SRC/FdroidSafety.java" "$SRC/ApkManifest.java" "$TEST/FdroidIndexClientTest.java"
+javac -d "$TMP/classes" "$SRC/Json.java" "$SRC/JsonStream.java" "$SRC/FdroidCatalog.java" "$SRC/FdroidRepository.java" "$SRC/FdroidIndexClient.java" "$SRC/OperationTable.java" "$SRC/FdroidApkInstaller.java" "$SRC/FdroidSafety.java" "$SRC/ApkManifest.java" "$TEST/FdroidIndexClientTest.java"
 mkdir -p "$TMP/payload2"
 printf '{"packages":{},"changed":true}\n' > "$TMP/index-v2-changed.json"
 CHANGED_HASH=$(sha256sum "$TMP/index-v2-changed.json" | cut -d' ' -f1)
@@ -40,3 +40,18 @@ printf '{"index":{"sha256":"%s"}}' "$CHANGED_HASH" > "$TMP/payload2/entry.json"
 jar --create --file "$TMP/entry-changed.jar" -C "$TMP/payload2" .
 jarsigner -keystore "$TMP/test.p12" -storepass changeit -keypass changeit "$TMP/entry-changed.jar" fixture >/dev/null
 java -cp "$TMP/classes" org.matonos.store.fdroid.FdroidIndexClientTest "$TMP/entry.jar" "$TMP/cert.der" "$TMP/index-v2.json" "$TMP/entry-changed.jar" "$TMP/index-v2-changed.json"
+python3 - "$TMP/large-index.json" <<'PY'
+import json, sys
+path=sys.argv[1]
+prefix='{"packages":{"org.example.demo":{"metadata":{"name":{"en-US":"Stream Demo"},"summary":{"en-US":"Large fixture"}},"versions":{"v1":{"file":{"name":"demo.apk","sha256":"abc"},"manifest":{"versionCode":1,"versionName":"1","signer":{"sha256":["aa"]}}}},"unused":"'
+suffix='"}}}'
+target=100*1024*1024
+with open(path,'w') as f:
+    f.write(prefix)
+    remaining=target-len(prefix)-len(suffix)
+    chunk='x'*min(1024*1024,remaining)
+    while remaining:
+        n=min(len(chunk),remaining); f.write(chunk[:n]); remaining-=n
+    f.write(suffix)
+PY
+/usr/bin/time -f 'large-index peak RSS: %M KiB' java -Xmx160m -cp "$TMP/classes" org.matonos.store.fdroid.FdroidIndexClientTest "$TMP/large-index.json"

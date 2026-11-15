@@ -21,6 +21,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public final class FdroidIndexClientTest {
   public static void main(String[] args) throws Exception {
+    if (args.length == 1) { testLargeStreamingIndex(new File(args[0])); return; }
     File signedJar = new File(args[0]);
     File certFile = new File(args[1]);
     String fingerprint = fingerprint(CertificateFactory.getInstance("X.509").generateCertificate(new FileInputStream(certFile)).getEncoded());
@@ -53,6 +54,15 @@ public final class FdroidIndexClientTest {
     testHttpCatalogueCache(signedJar, certFile, new File(args[2]), new File(args[3]), new File(args[4]));
     testOperationTable();
     System.out.println("PASS: signed JAR, signer pin, index hash, index parser, APK hash before commit, update signer/version checks, repository trust/removal");
+  }
+  private static void testLargeStreamingIndex(File file) throws Exception {
+    check(file.length() >= 100L * 1024 * 1024, "synthetic index is at least 100 MiB");
+    java.util.Map<String,Object> index = new FdroidIndexClient().parseCatalogueForTest(file);
+    java.util.Map<String,Object> packages = (java.util.Map<String,Object>) index.get("packages");
+    check(packages.size() == 1, "large index retains only searchable package catalogue");
+    java.util.Map<String,Object> app = (java.util.Map<String,Object>) packages.get("org.example.demo");
+    check(app != null && "Stream Demo".equals(app.get("name")), "large index app remains searchable");
+    System.out.println("PASS: 100 MiB streaming index searchable under configured heap; retained package count=" + packages.size());
   }
 
   private static void testOperationTable() throws Exception {
