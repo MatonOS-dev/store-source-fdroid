@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 
 /** Pure catalogue operations shared by the Binder adapter and host tests. */
 final class FdroidCatalog {
@@ -29,4 +31,26 @@ final class FdroidCatalog {
     for (Map<String, Object> repo : repositories) if (id.equals(repo.get("id"))) return repo;
     throw new IllegalArgumentException("Unknown repository " + id);
   }
+
+  static <T, R> List<Future<R>> submitOrdered(List<T> inputs, ExecutorService executor, CheckedFunction<T, R> action) {
+    List<Future<R>> futures = new ArrayList<>();
+    for (T input : inputs) futures.add(executor.submit(() -> action.apply(input)));
+    return futures;
+  }
+
+  interface CheckedFunction<T, R> { R apply(T value) throws Exception; }
+
+  static <T> List<T> cachedQueryPage(Map<String, List<T>> cache, String mode, String term, int offset,
+      CheckedSupplier<List<T>> refresh) throws Exception {
+    String key = mode + "\n" + (term == null ? "" : term);
+    if (offset == 0) {
+      List<T> result = refresh.get();
+      cache.put(key, result);
+      return result;
+    }
+    List<T> result = cache.get(key);
+    return result == null ? refresh.get() : result;
+  }
+
+  interface CheckedSupplier<T> { T get() throws Exception; }
 }

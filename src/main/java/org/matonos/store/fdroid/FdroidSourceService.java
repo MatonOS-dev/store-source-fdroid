@@ -154,8 +154,8 @@ public final class FdroidSourceService extends Service {
     List<Map<String, Object>> installed = mode.equals("search") ? Collections.emptyList() : installedVersions();
     List<String> names = new ArrayList<>(); for (Map<String, Object> p : installed) names.add(text(p.get("packageName")));
     List<Map<String,Object>> enabled=repositories.list();
-    List<Future<List<Map<String,Object>>>> futures=new ArrayList<>();
-    for(Map<String,Object> repo:enabled) futures.add(repoQueries.submit(() -> queryRepository(repo,mode,term,installed,names)));
+    List<Future<List<Map<String,Object>>>> futures=FdroidCatalog.submitOrdered(enabled,repoQueries,
+      repo->queryRepository(repo,mode,term,installed,names));
     int succeeded=0; Exception last=null;
     for(int repoIndex=0;repoIndex<enabled.size();repoIndex++) {
       Map<String,Object> repo=enabled.get(repoIndex); String url=text(repo.get("url"));
@@ -179,9 +179,7 @@ public final class FdroidSourceService extends Service {
       return accepted;
   }
   private List<Map<String,Object>> queryCatalogue(String mode,String term,int offset) throws Exception {
-    String key=mode+"\n"+(term==null?"":term);
-    if(offset==0){List<Map<String,Object>> result=catalogue(mode,term);queryResults.put(key,result);return result;}
-    List<Map<String,Object>> cached=queryResults.get(key);return cached==null?catalogue(mode,term):cached;
+    return FdroidCatalog.cachedQueryPage(queryResults,mode,term,offset,()->catalogue(mode,term));
   }
   private Map<String,Object> find(String id, String repoId) throws Exception {
     try { Map<String,Object> repo=FdroidCatalog.repository(repositories.list(),repoId);

@@ -43,7 +43,34 @@ public final class FdroidIndexClientTest {
     testSafety();
     testManifest(signedJar.getParentFile());
     testTypedCatalogContract();
+    testParallelRepoOrderAndPageCache();
     System.out.println("PASS: signed JAR, signer pin, index hash, index parser, APK hash before commit, update signer/version checks, repository trust/removal");
+  }
+
+  private static void testParallelRepoOrderAndPageCache() throws Exception {
+    java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+    try {
+      long started = System.nanoTime();
+      java.util.List<java.util.concurrent.Future<java.util.List<String>>> futures = FdroidCatalog.submitOrdered(java.util.List.of("first", "second"), pool, repo -> {
+        Thread.sleep(450);
+        return java.util.List.of(repo + "-result");
+      });
+      java.util.List<String> merged = new java.util.ArrayList<>();
+      for (java.util.concurrent.Future<java.util.List<String>> future : futures) merged.addAll(future.get());
+      long elapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+      check(merged.equals(java.util.List.of("first-result", "second-result")), "parallel repo merge retains input order");
+      check(elapsedMs < 800, "slow repositories execute in parallel (elapsed " + elapsedMs + "ms)");
+    } finally { pool.shutdownNow(); }
+
+    java.util.Map<String, java.util.List<String>> cache = new java.util.HashMap<>();
+    java.util.concurrent.atomic.AtomicInteger refreshes = new java.util.concurrent.atomic.AtomicInteger();
+    FdroidCatalog.CheckedSupplier<java.util.List<String>> refresh = () -> {
+      refreshes.incrementAndGet(); return java.util.List.of("a", "b", "c");
+    };
+    java.util.List<String> firstPage = FdroidCatalog.page(FdroidCatalog.cachedQueryPage(cache, "search", "term", 0, refresh), 0, 2);
+    java.util.List<String> secondPage = FdroidCatalog.page(FdroidCatalog.cachedQueryPage(cache, "search", "term", 2, refresh), 2, 2);
+    check(firstPage.equals(java.util.List.of("a", "b")) && secondPage.equals(java.util.List.of("c")), "page two slices the cached query result");
+    check(refreshes.get() == 1, "page two does not refresh catalogue query");
   }
 
   private static void testTypedCatalogContract() throws Exception {
