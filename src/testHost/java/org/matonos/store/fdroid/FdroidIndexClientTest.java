@@ -69,6 +69,7 @@ public final class FdroidIndexClientTest {
     byte[] firstJar = bytes(entryJar), secondJar = bytes(changedJar), firstIndex = bytes(indexFile), secondIndex = bytes(changedIndex);
     AtomicInteger entryRequests = new AtomicInteger(), indexRequests = new AtomicInteger();
     java.util.concurrent.atomic.AtomicReference<Boolean> changed = new java.util.concurrent.atomic.AtomicReference<>(false);
+    java.util.concurrent.atomic.AtomicBoolean brokenIndexOnce = new java.util.concurrent.atomic.AtomicBoolean();
     HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     server.createContext("/repo/entry.jar", exchange -> {
       entryRequests.incrementAndGet();
@@ -83,6 +84,7 @@ public final class FdroidIndexClientTest {
     });
     server.createContext("/repo/index-v2.json", exchange -> {
       indexRequests.incrementAndGet(); byte[] body = changed.get() ? secondIndex : firstIndex;
+      if (brokenIndexOnce.getAndSet(false)) body = "{}".getBytes(StandardCharsets.UTF_8);
       exchange.sendResponseHeaders(200, body.length); exchange.getResponseBody().write(body); exchange.close();
     });
     server.start();
@@ -110,6 +112,14 @@ public final class FdroidIndexClientTest {
       // A fresh client with a 304 must recover the verified catalogue from disk.
       cold.search(cache, repo, signer, "");
       check(cold.parseCountForTest() == 1, "cold 304 parses verified index from disk");
+      // A failed verification must not leave validators behind: the next load
+      // has no index to answer a 304 from and must fetch the entry again.
+      File failedCache = Files.createTempDirectory("fdroid-cache-failed").toFile();
+      brokenIndexOnce.set(true);
+      boolean rejected = false;
+      try { new FdroidIndexClient().search(failedCache, repo, signer, ""); } catch (Exception expected) { rejected = true; }
+      check(rejected, "index with wrong hash is rejected");
+      new FdroidIndexClient().search(failedCache, repo, signer, "");
     } finally {
       server.stop(0);
       File[] files = cache.listFiles(); if (files != null) for (File file : files) { File[] nested=file.listFiles(); if(nested!=null)for(File child:nested)child.delete(); file.delete(); }

@@ -175,7 +175,9 @@ public final class FdroidIndexClient {
     File repoCache = new File(cacheRoot, key);
     File indexFile = new File(repoCache, "index-v2.json");
     loadValidators(repoCache, key);
-    HttpURLConnection response = request(repo + "/entry.jar", validators.get(key));
+    // Validators are only sent when a verified index exists to answer a 304 from.
+    boolean haveIndex = catalogues.containsKey(key) || indexFile.isFile();
+    HttpURLConnection response = request(repo + "/entry.jar", haveIndex ? validators.get(key) : null);
     int status = response.getResponseCode();
     if (status == HttpURLConnection.HTTP_NOT_MODIFIED) {
       response.disconnect();
@@ -190,8 +192,7 @@ public final class FdroidIndexClient {
     byte[] entryJar;
     String etag=response.getHeaderField("ETag"), modified=response.getHeaderField("Last-Modified");
     try (InputStream input=response.getInputStream()) { entryJar=readAll(input); } finally { response.disconnect(); }
-    validators.put(key, new String[]{etag == null ? "" : etag, modified == null ? "" : modified});
-    saveValidators(repoCache, key, validators.get(key));
+    String[] fresh = {etag == null ? "" : etag, modified == null ? "" : modified};
     verifyEntryJar(entryJar, signer);
     byte[] entryBytes = verifiedEntryJson(entryJar);
     Map<String, Object> entry = parseIndex(new String(entryBytes, "UTF-8"));
@@ -203,16 +204,21 @@ public final class FdroidIndexClient {
       try (InputStream input = new java.io.FileInputStream(indexFile)) { cached = readAll(input); }
       if (fingerprint(cached).equals(normalizeFingerprint(expectedHash))) {
         Map<String,Object> current=catalogues.get(key);
-        if (current != null) return current;
-        Map<String,Object> parsed=parseIndex(new String(cached, "UTF-8")); catalogues.put(key, parsed); return parsed;
+        if (current == null) { current=parseIndex(new String(cached, "UTF-8")); catalogues.put(key, current); }
+        storeValidators(repoCache, key, fresh); return current;
       }
     }
     byte[] index = download(repo + "/index-v2.json");
     verifyIndexHash(index, expectedHash);
     if (!repoCache.exists() && !repoCache.mkdirs()) throw new IllegalStateException("Cannot create F-Droid cache");
     try (FileOutputStream output = new FileOutputStream(indexFile)) { output.write(index); }
-    Map<String,Object> parsed=parseIndex(new String(index, "UTF-8")); catalogues.put(key, parsed); return parsed;
+    Map<String,Object> parsed=parseIndex(new String(index, "UTF-8")); catalogues.put(key, parsed);
+    storeValidators(repoCache, key, fresh); return parsed;
     }
+  }
+
+  private void storeValidators(File directory, String key, String[] values) throws Exception {
+    validators.put(key, values); saveValidators(directory, key, values);
   }
 
   synchronized int parseCountForTest() { return parseCount; }
