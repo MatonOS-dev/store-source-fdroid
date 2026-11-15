@@ -20,6 +20,7 @@ import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.FutureTask;
 import java.util.jar.JarEntry;
+import java.util.jar.JarFile;
 import java.util.jar.JarInputStream;
 
 /** Reads and caches one F-Droid index-v2 catalogue after checking its signed entry point. */
@@ -127,24 +128,31 @@ public final class FdroidIndexClient {
   }
 
   void verifyEntryJar(byte[] jarBytes, String expectedFingerprint) throws Exception {
-    boolean foundContent = false;
-    try (JarInputStream jar = new JarInputStream(new ByteArrayInputStream(jarBytes), true)) {
-      JarEntry entry;
-      byte[] buffer = new byte[8192];
-      while ((entry = jar.getNextJarEntry()) != null) {
-        if (entry.isDirectory() || entry.getName().startsWith("META-INF/")) continue;
-        while (jar.read(buffer) != -1) { }
-        Certificate[] certificates = entry.getCertificates();
-        if (certificates == null || certificates.length == 0) throw new SecurityException("Unsigned entry in F-Droid entry JAR");
-        boolean signerMatched = false;
-        for (Certificate certificate : certificates) {
-          if (fingerprint(certificate.getEncoded()).equals(normalizeFingerprint(expectedFingerprint))) signerMatched = true;
+    // JarFile reads the central directory; JarInputStream only verifies when
+    // META-INF/MANIFEST.MF comes first, which F-Droid's entry.jar does not do.
+    File temp = File.createTempFile("entry", ".jar");
+    try {
+      try (FileOutputStream out = new FileOutputStream(temp)) { out.write(jarBytes); }
+      boolean foundContent = false;
+      try (JarFile jar = new JarFile(temp, true)) {
+        byte[] buffer = new byte[8192];
+        for (JarEntry entry : Collections.list(jar.entries())) {
+          if (entry.isDirectory() || entry.getName().startsWith("META-INF/")) continue;
+          try (InputStream in = jar.getInputStream(entry)) { while (in.read(buffer) != -1) { } }
+          Certificate[] certificates = entry.getCertificates();
+          if (certificates == null || certificates.length == 0) throw new SecurityException("Unsigned entry in F-Droid entry JAR: " + entry.getName());
+          boolean signerMatched = false;
+          for (Certificate certificate : certificates) {
+            if (fingerprint(certificate.getEncoded()).equals(normalizeFingerprint(expectedFingerprint))) signerMatched = true;
+          }
+          if (!signerMatched) throw new SecurityException("F-Droid entry JAR signer fingerprint did not match");
+          foundContent = true;
         }
-        if (!signerMatched) throw new SecurityException("F-Droid entry JAR signer fingerprint did not match");
-        foundContent = true;
       }
+      if (!foundContent) throw new SecurityException("F-Droid entry JAR has no signed content");
+    } finally {
+      if (!temp.delete() && temp.exists()) throw new java.io.IOException("Cannot delete temporary entry JAR " + temp);
     }
-    if (!foundContent) throw new SecurityException("F-Droid entry JAR has no signed content");
   }
 
   void verifyIndexHash(byte[] index, String expectedHash) throws Exception {

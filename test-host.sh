@@ -16,6 +16,14 @@ keytool -genkeypair -alias fixture -keyalg RSA -keysize 2048 -validity 2 \
   -storepass changeit -keypass changeit -noprompt >/dev/null 2>&1
 jar --create --file "$TMP/entry.jar" -C "$TMP/payload" .
 jarsigner -keystore "$TMP/test.p12" -storepass changeit -keypass changeit "$TMP/entry.jar" fixture >/dev/null
+# F-Droid's entry.jar stores entry.json before META-INF/; keep that order so
+# verification is tested against the real layout (JarInputStream fails on it).
+python3 -c 'import sys,zipfile
+src=zipfile.ZipFile(sys.argv[1]); names=sorted(src.namelist(), key=lambda n: n.startswith("META-INF/"))
+with zipfile.ZipFile(sys.argv[2],"w",zipfile.ZIP_DEFLATED) as out:
+  [out.writestr(src.getinfo(n), src.read(n)) for n in names]' "$TMP/entry.jar" "$TMP/entry-fdroid.jar"
+mv "$TMP/entry-fdroid.jar" "$TMP/entry.jar"
+[[ $(unzip -Z1 "$TMP/entry.jar" | sed -n 1p) == entry.json ]] || { echo "fixture JAR not in F-Droid order" >&2; exit 1; }
 keytool -exportcert -alias fixture -keystore "$TMP/test.p12" -storepass changeit -file "$TMP/cert.der" >/dev/null 2>&1
 SDK=${ANDROID_HOME:-$HOME/Android/Sdk}
 AAPT2="$SDK/build-tools/36.0.0/aapt2"
