@@ -12,6 +12,9 @@ import java.net.*;
 import java.security.MessageDigest;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Signed F-Droid catalogues and verified downloads; only the store installs packages. */
@@ -20,6 +23,8 @@ public final class FdroidSourceService extends Service {
   private FdroidRepositories repositories;
   private FdroidIndexClient client;
   private final Map<String, InstallTask> installs = new ConcurrentHashMap<>();
+  private final Map<String, List<Map<String,Object>>> queryResults = new ConcurrentHashMap<>();
+  private final ExecutorService repoQueries = Executors.newCachedThreadPool();
 
   @Override public void onCreate() {
     super.onCreate(); repositories = new FdroidRepositories(this);
@@ -43,17 +48,17 @@ public final class FdroidSourceService extends Service {
       return info;
     }
     @Override public AppListing[] search(String term, int offset, int limit) {
-      return call("search", () -> listingArray(FdroidCatalog.page(listings(catalogue("search", term)), offset, limit)));
+      return call("search", () -> listingArray(FdroidCatalog.page(listings(queryCatalogue("search", term, offset)), offset, limit)));
     }
     @Override public AppDetails details(String id, String repo) {
       return call("details id=" + id + " repo=" + repo, () -> detailsObject(find(id, repo)));
     }
     @Override public Review[] reviews(String id, int offset, int limit) { throw new UnsupportedOperationException("F-Droid reviews are not supported"); }
     @Override public AppListing[] installed(int offset, int limit) {
-      return call("installed", () -> listingArray(FdroidCatalog.page(listings(catalogue("installed", "")), offset, limit)));
+      return call("installed", () -> listingArray(FdroidCatalog.page(listings(queryCatalogue("installed", "", offset)), offset, limit)));
     }
     @Override public AppListing[] updates(int offset, int limit) {
-      return call("updates", () -> listingArray(FdroidCatalog.page(listings(catalogue("updates", "")), offset, limit)));
+      return call("updates", () -> listingArray(FdroidCatalog.page(listings(queryCatalogue("updates", "", offset)), offset, limit)));
     }
     @Override public Repo[] repos(int offset, int limit) {
       return call("repos", () -> repoArray(FdroidCatalog.page(repositories.list(), offset, limit)));
@@ -148,22 +153,35 @@ public final class FdroidSourceService extends Service {
     List<Map<String, Object>> result = new ArrayList<>();
     List<Map<String, Object>> installed = mode.equals("search") ? Collections.emptyList() : installedVersions();
     List<String> names = new ArrayList<>(); for (Map<String, Object> p : installed) names.add(text(p.get("packageName")));
+    List<Map<String,Object>> enabled=repositories.list();
+    List<Future<List<Map<String,Object>>>> futures=new ArrayList<>();
+    for(Map<String,Object> repo:enabled) futures.add(repoQueries.submit(() -> queryRepository(repo,mode,term,installed,names)));
     int succeeded=0; Exception last=null;
-    for (Map<String, Object> repo : repositories.list()) {
-      String url=text(repo.get("url")), fingerprint=text(repo.get("fingerprint"));
-      try { List<Map<String,Object>> apps;
-        if(mode.equals("updates")) apps=client.updatesCatalogue(getFilesDir(),url,fingerprint,installed);
-        else if(mode.equals("installed")) apps=client.installedCatalogue(getFilesDir(),url,fingerprint,names);
-        else apps=client.search(getFilesDir(),url,fingerprint,term);
-        repositories.setBroken(url,false); succeeded++;
-        for(Map<String,Object> app:FdroidCatalog.candidates(apps,url)) {
-          if(mode.equals("installed")){ Map<String,Object> current=null; for(Map<String,Object> p:installed) if(p.get("packageName").equals(app.get("id"))) current=p;
-            if(current==null || !current.get("signerSha256").equals(app.get("signerSha256"))) continue; }
-          decorate(app,url); app.put("repo",url); if(!mode.equals("search")) app.put("installed",true); result.add(app);
-        }
-      } catch(Exception error) { Log.e(TAG,mode+" repository="+url+" failed",error); repositories.setBroken(url,true); last=error; }
+    for(int repoIndex=0;repoIndex<enabled.size();repoIndex++) {
+      Map<String,Object> repo=enabled.get(repoIndex); String url=text(repo.get("url"));
+      try { List<Map<String,Object>> apps=futures.get(repoIndex).get(); repositories.setBroken(url,false); succeeded++;
+        for(Map<String,Object> app:apps){decorate(app,url); app.put("repo",url); if(!mode.equals("search"))app.put("installed",true); result.add(app);}
+      } catch(Exception error) { Throwable cause=error instanceof java.util.concurrent.ExecutionException ? error.getCause() : error; Exception failure=cause instanceof Exception?(Exception)cause:new Exception(cause); Log.e(TAG,mode+" repository="+url+" failed",failure); repositories.setBroken(url,true); last=failure; }
     }
     if(succeeded==0 && last!=null) throw last; return result;
+  }
+  private List<Map<String,Object>> queryRepository(Map<String,Object> repo,String mode,String term,List<Map<String,Object>> installed,List<String> names) throws Exception {
+      String url=text(repo.get("url")), fingerprint=text(repo.get("fingerprint")); List<Map<String,Object>> apps;
+      if(mode.equals("updates")) apps=client.updatesCatalogue(getFilesDir(),url,fingerprint,installed);
+      else if(mode.equals("installed")) apps=client.installedCatalogue(getFilesDir(),url,fingerprint,names);
+      else apps=client.search(getFilesDir(),url,fingerprint,term);
+      List<Map<String,Object>> accepted=new ArrayList<>();
+      for(Map<String,Object> app:FdroidCatalog.candidates(apps,url)) {
+        if(mode.equals("installed")){Map<String,Object> current=null;for(Map<String,Object> p:installed)if(p.get("packageName").equals(app.get("id")))current=p;
+          if(current==null||!current.get("signerSha256").equals(app.get("signerSha256")))continue;}
+        accepted.add(app);
+      }
+      return accepted;
+  }
+  private List<Map<String,Object>> queryCatalogue(String mode,String term,int offset) throws Exception {
+    String key=mode+"\n"+(term==null?"":term);
+    if(offset==0){List<Map<String,Object>> result=catalogue(mode,term);queryResults.put(key,result);return result;}
+    List<Map<String,Object>> cached=queryResults.get(key);return cached==null?catalogue(mode,term):cached;
   }
   private Map<String,Object> find(String id, String repoId) throws Exception {
     try { Map<String,Object> repo=FdroidCatalog.repository(repositories.list(),repoId);

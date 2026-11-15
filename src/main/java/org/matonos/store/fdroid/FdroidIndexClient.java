@@ -16,6 +16,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Properties;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.FutureTask;
 import java.util.jar.JarEntry;
 import java.util.jar.JarInputStream;
 
@@ -28,6 +31,11 @@ public final class FdroidIndexClient {
   private final int sdk;
   private final List<String> abis;
   private final java.util.Set<String> features;
+  private final Map<String, Object> locks = new ConcurrentHashMap<>();
+  private final Map<String, Map<String, Object>> catalogues = new ConcurrentHashMap<>();
+  private final Map<String, String[]> validators = new ConcurrentHashMap<>();
+  private final Map<String, FutureTask<Map<String,Object>>> refreshes = new ConcurrentHashMap<>();
+  private int parseCount;
   public FdroidIndexClient() { this(37, Collections.singletonList("x86_64"), null); }
   public FdroidIndexClient(int sdk, List<String> abis, java.util.Set<String> features) { this.sdk = sdk; this.abis = abis; this.features = features; }
   private boolean compatible(Map<String, Object> version) {
@@ -108,6 +116,7 @@ public final class FdroidIndexClient {
   }
 
   Map<String, Object> parseIndex(String json) {
+    synchronized (this) { parseCount++; }
     Object parsed = Json.parse(json);
     if (!(parsed instanceof Map)) throw new IllegalArgumentException("F-Droid index is not an object");
     return cast(parsed);
@@ -145,9 +154,36 @@ public final class FdroidIndexClient {
   private Map<String, Object> load(File cacheRoot, String repository, String expectedFingerprint) throws Exception {
     String repo = (repository == null || repository.isEmpty()) ? DEFAULT_REPO : repository;
     String signer = FdroidRepository.normalizeFingerprint(expectedFingerprint);
-    File repoCache = new File(cacheRoot, fingerprint((repo + "\n" + signer).getBytes("UTF-8")));
+    String key = fingerprint((repo + "\n" + signer).getBytes("UTF-8"));
+    FutureTask<Map<String,Object>> created=new FutureTask<>(() -> loadLocked(cacheRoot,repo,signer,key));
+    FutureTask<Map<String,Object>> task=refreshes.putIfAbsent(key,created);
+    if(task==null){task=created;task.run();}
+    try{return task.get();}catch(java.util.concurrent.ExecutionException error){Throwable cause=error.getCause();if(cause instanceof Exception)throw (Exception)cause;throw new IllegalStateException("F-Droid refresh failed for "+repo,cause);}finally{refreshes.remove(key,task);}
+  }
+
+  private Map<String,Object> loadLocked(File cacheRoot,String repo,String signer,String key) throws Exception {
+    Object lock = locks.computeIfAbsent(key, ignored -> new Object());
+    synchronized (lock) {
+    File repoCache = new File(cacheRoot, key);
     File indexFile = new File(repoCache, "index-v2.json");
-    byte[] entryJar = download(repo + "/entry.jar");
+    loadValidators(repoCache, key);
+    HttpURLConnection response = request(repo + "/entry.jar", validators.get(key));
+    int status = response.getResponseCode();
+    if (status == HttpURLConnection.HTTP_NOT_MODIFIED) {
+      response.disconnect();
+      Map<String, Object> cached = catalogues.get(key);
+      if (cached != null) return cached;
+      if (!indexFile.isFile()) throw new IllegalStateException("F-Droid returned 304 without cached index for " + repo);
+      byte[] disk;
+      try (InputStream input = new java.io.FileInputStream(indexFile)) { disk = readAll(input); }
+      Map<String,Object> parsed = parseIndex(new String(disk, "UTF-8")); catalogues.put(key, parsed); return parsed;
+    }
+    if (status < 200 || status >= 300) { response.disconnect(); throw new IllegalStateException("F-Droid returned HTTP " + status + " for " + repo + "/entry.jar"); }
+    byte[] entryJar;
+    String etag=response.getHeaderField("ETag"), modified=response.getHeaderField("Last-Modified");
+    try (InputStream input=response.getInputStream()) { entryJar=readAll(input); } finally { response.disconnect(); }
+    validators.put(key, new String[]{etag == null ? "" : etag, modified == null ? "" : modified});
+    saveValidators(repoCache, key, validators.get(key));
     verifyEntryJar(entryJar, signer);
     byte[] entryBytes = verifiedEntryJson(entryJar);
     Map<String, Object> entry = parseIndex(new String(entryBytes, "UTF-8"));
@@ -157,13 +193,32 @@ public final class FdroidIndexClient {
     if (indexFile.isFile()) {
       byte[] cached;
       try (InputStream input = new java.io.FileInputStream(indexFile)) { cached = readAll(input); }
-      if (fingerprint(cached).equals(normalizeFingerprint(expectedHash))) return parseIndex(new String(cached, "UTF-8"));
+      if (fingerprint(cached).equals(normalizeFingerprint(expectedHash))) {
+        Map<String,Object> current=catalogues.get(key);
+        if (current != null) return current;
+        Map<String,Object> parsed=parseIndex(new String(cached, "UTF-8")); catalogues.put(key, parsed); return parsed;
+      }
     }
     byte[] index = download(repo + "/index-v2.json");
     verifyIndexHash(index, expectedHash);
     if (!repoCache.exists() && !repoCache.mkdirs()) throw new IllegalStateException("Cannot create F-Droid cache");
     try (FileOutputStream output = new FileOutputStream(indexFile)) { output.write(index); }
-    return parseIndex(new String(index, "UTF-8"));
+    Map<String,Object> parsed=parseIndex(new String(index, "UTF-8")); catalogues.put(key, parsed); return parsed;
+    }
+  }
+
+  synchronized int parseCountForTest() { return parseCount; }
+  private void loadValidators(File directory, String key) throws Exception {
+    if (validators.containsKey(key)) return;
+    File file=new File(directory,"entry-http.properties");
+    if (!file.isFile()) return;
+    Properties p=new Properties(); try(InputStream in=new java.io.FileInputStream(file)){p.load(in);}
+    validators.put(key,new String[]{p.getProperty("etag",""),p.getProperty("lastModified","")});
+  }
+  private void saveValidators(File directory,String key,String[] values) throws Exception {
+    if (!directory.exists() && !directory.mkdirs()) throw new IllegalStateException("Cannot create F-Droid cache directory " + directory);
+    Properties p=new Properties(); p.setProperty("etag",values[0]); p.setProperty("lastModified",values[1]);
+    try(FileOutputStream out=new FileOutputStream(new File(directory,"entry-http.properties"))){p.store(out,"F-Droid entry HTTP validators");}
   }
 
   private byte[] verifiedEntryJson(byte[] jarBytes) throws Exception {
@@ -175,13 +230,20 @@ public final class FdroidIndexClient {
   }
 
   private byte[] download(String address) throws Exception {
-    HttpURLConnection connection = (HttpURLConnection) new URL(address).openConnection();
+    HttpURLConnection connection = request(address, null);
     connection.setConnectTimeout(20000); connection.setReadTimeout(60000); connection.setInstanceFollowRedirects(true);
     connection.setRequestProperty("User-Agent", "MatonOS-Software-Center/1.0");
     try {
       if (connection.getResponseCode() < 200 || connection.getResponseCode() >= 300) throw new IllegalStateException("F-Droid returned HTTP " + connection.getResponseCode());
       try (InputStream input = connection.getInputStream()) { return readAll(input); }
     } finally { connection.disconnect(); }
+  }
+  private HttpURLConnection request(String address,String[] conditions) throws Exception {
+    HttpURLConnection connection=(HttpURLConnection)new URL(address).openConnection();
+    connection.setConnectTimeout(20000); connection.setReadTimeout(60000); connection.setInstanceFollowRedirects(true);
+    connection.setRequestProperty("User-Agent", "MatonOS-Software-Center/1.0");
+    if(conditions!=null){if(!conditions[0].isEmpty())connection.setRequestProperty("If-None-Match",conditions[0]);if(!conditions[1].isEmpty())connection.setRequestProperty("If-Modified-Since",conditions[1]);}
+    return connection;
   }
 
   private Map<String, Object> app(String packageName, Map<String, Object> raw) {
