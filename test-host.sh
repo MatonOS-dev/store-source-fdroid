@@ -20,5 +20,5 @@ for kind in base split; do
   printf '<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.example.demo" %s android:versionCode="1"><uses-sdk android:minSdkVersion="37"/><application/></manifest>' "$split_attr" > "$TMP/AndroidManifest.xml"
   "$AAPT2" link --manifest "$TMP/AndroidManifest.xml" -I "$SDK/platforms/android-37.0/android.jar" -o "$TMP/$kind.apk"
 done
-javac -d "$TMP/classes" "$SRC/Json.java" "$SRC/FdroidRepository.java" "$SRC/FdroidIndexClient.java" "$SRC/FdroidApkInstaller.java" "$SRC/FdroidSafety.java" "$SRC/ApkManifest.java" "$TEST/FdroidIndexClientTest.java"
+javac -d "$TMP/classes" "$SRC/Json.java" "$SRC/FdroidCatalog.java" "$SRC/FdroidRepository.java" "$SRC/FdroidIndexClient.java" "$SRC/FdroidApkInstaller.java" "$SRC/FdroidSafety.java" "$SRC/ApkManifest.java" "$TEST/FdroidIndexClientTest.java"
 java -cp "$TMP/classes" org.matonos.store.fdroid.FdroidIndexClientTest "$TMP/entry.jar" "$TMP/cert.der"

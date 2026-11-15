@@ -42,7 +42,30 @@ public final class FdroidIndexClientTest {
     testCompatibility();
     testSafety();
     testManifest(signedJar.getParentFile());
+    testTypedCatalogContract();
     System.out.println("PASS: signed JAR, signer pin, index hash, index parser, APK hash before commit, update signer/version checks, repository trust/removal");
+  }
+
+  private static void testTypedCatalogContract() throws Exception {
+    java.util.Map<String,Object> app = new java.util.LinkedHashMap<>(); app.put("id", "org.example.same");
+    java.util.List<java.util.Map<String,Object>> first = FdroidCatalog.candidates(java.util.List.of(app), "https://one.example/repo");
+    java.util.List<java.util.Map<String,Object>> second = FdroidCatalog.candidates(java.util.List.of(app), "https://two.example/repo");
+    java.util.List<java.util.Map<String,Object>> combined = new java.util.ArrayList<>(); combined.addAll(first); combined.addAll(second);
+    check(combined.size() == 2, "same package remains two repo candidates");
+    check("org.example.same".equals(combined.get(0).get("id")), "candidate id stays package name");
+    check("https://one.example/repo".equals(combined.get(0).get("repo")), "first candidate repo id");
+    check("https://two.example/repo".equals(combined.get(1).get("repo")), "second candidate repo id");
+    java.util.Map<String,Object> one = new java.util.LinkedHashMap<>(); one.put("id", "https://one.example/repo"); one.put("url", "https://one.example/repo");
+    java.util.Map<String,Object> two = new java.util.LinkedHashMap<>(); two.put("id", "https://two.example/repo"); two.put("url", "https://two.example/repo");
+    java.util.List<java.util.Map<String,Object>> repos = java.util.List.of(one, two);
+    check(FdroidCatalog.repository(repos, "https://two.example/repo") == two, "details and install resolve the selected repo only");
+    expectIllegalArgument(() -> FdroidCatalog.repository(repos, "missing"), "unknown candidate repo");
+    java.util.List<Integer> values = java.util.List.of(0,1,2,3,4);
+    check(FdroidCatalog.page(values, 1, 2).equals(java.util.List.of(1,2)), "page offset and limit");
+    check(FdroidCatalog.page(values, 4, 20).equals(java.util.List.of(4)), "short final page");
+    check(FdroidCatalog.page(values, 8, 2).isEmpty(), "past-end page");
+    expectIllegalArgument(() -> FdroidCatalog.page(values, -1, 2), "negative page offset");
+    expectIllegalArgument(() -> FdroidCatalog.page(values, 0, 0), "zero page limit");
   }
 
   private static void testCompatibility() {
