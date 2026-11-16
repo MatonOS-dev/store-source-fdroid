@@ -17,6 +17,24 @@ final class FdroidCatalog {
     return new ArrayList<>(values.subList(offset, (int)Math.min(values.size(), (long)offset + limit)));
   }
 
+  static List<Map<String, Object>> recentlyAdded(List<Map<String, Object>> apps) {
+    List<Map<String, Object>> result = new ArrayList<>(apps);
+    result.sort((left, right) -> {
+      long a = added(left.get("added")), b = added(right.get("added"));
+      int order = Long.compare(b, a);
+      return order != 0 ? order : text(left.get("id")).compareToIgnoreCase(text(right.get("id")));
+    });
+    return result;
+  }
+
+  private static long added(Object value) {
+    if (value instanceof Number) return ((Number)value).longValue();
+    if (value instanceof String) try { return Long.parseLong((String)value); } catch (NumberFormatException ignored) { return 0; }
+    return 0;
+  }
+
+  private static String text(Object value) { return value == null ? "" : String.valueOf(value); }
+
   static List<Map<String, Object>> candidates(List<Map<String, Object>> apps, String repository) {
     List<Map<String, Object>> result = new ArrayList<>();
     for (Map<String, Object> app : apps) {

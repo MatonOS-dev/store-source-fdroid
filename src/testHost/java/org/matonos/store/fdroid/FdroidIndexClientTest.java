@@ -34,7 +34,7 @@ public final class FdroidIndexClientTest {
     expectFailure(() -> client.verifyEntryJar(bytes(damaged), fingerprint), "damaged JAR signature");
     expectFailure(() -> client.verifyIndexHash("index data".getBytes(StandardCharsets.UTF_8), "00".repeat(32)), "index hash mismatch");
 
-    String fixture = "{\"packages\":{\"org.example.demo\":{\"metadata\":{\"name\":{\"en-US\":\"Demo App\"},\"summary\":{\"en-US\":\"A small fixture\"},\"icon\":{\"en-US\":{\"name\":\"/icons/demo.png\"}}},\"versions\":{\"abc\":{\"file\":[{\"name\":\"/demo.apk\",\"sha256\":\"abc123\"},{\"name\":\"/demo-split.apk\",\"sha256\":\"def456\"}],\"manifest\":{\"versionName\":\"1.2\",\"versionCode\":12,\"signer\":{\"sha256\":[\"aa11\"]}}}}}}}";
+    String fixture = "{\"packages\":{\"org.example.demo\":{\"added\":1712345678,\"metadata\":{\"name\":{\"en-US\":\"Demo App\"},\"summary\":{\"en-US\":\"A small fixture\"},\"icon\":{\"en-US\":{\"name\":\"/icons/demo.png\"}}},\"versions\":{\"abc\":{\"file\":[{\"name\":\"/demo.apk\",\"sha256\":\"abc123\"},{\"name\":\"/demo-split.apk\",\"sha256\":\"def456\"}],\"manifest\":{\"versionName\":\"1.2\",\"versionCode\":12,\"signer\":{\"sha256\":[\"aa11\"]}}}}}}}";
     java.util.Map<String, Object> parsed = client.parseIndex(fixture);
     java.util.Map<String, Object> app = client.detailsFromParsedIndex(parsed, "org.example.demo");
     check("Demo App".equals(app.get("name")), "parser name");
@@ -43,11 +43,19 @@ public final class FdroidIndexClientTest {
     check("abc123".equals(app.get("apkSha256")), "parser APK hash");
     check(((java.util.List<?>) app.get("apkFiles")).size() == 2, "parser split APK files");
     check(((Number) app.get("versionCode")).longValue() == 12, "parser version code");
+    check(((Number) app.get("added")).longValue() == 1712345678L, "index added timestamp retained for New collection");
+    File streamedIndex = new File(signedJar.getParentFile(), "added-index.json");
+    Files.writeString(streamedIndex.toPath(), fixture, StandardCharsets.UTF_8);
+    java.util.Map<String,Object> streamed = client.parseCatalogueForTest(streamedIndex);
+    java.util.Map<String,Object> streamedApp = (java.util.Map<String,Object>)((java.util.Map<?,?>)streamed.get("packages")).get("org.example.demo");
+    check(((Number)streamedApp.get("added")).longValue() == 1712345678L, "streaming cached-index parser retains the added timestamp");
+    Files.delete(streamedIndex.toPath());
     testApkHashBeforeCommit(signedJar.getParentFile());
     testUpdateEligibility(client, parsed);
     testRepositoryChanges();
     testCompatibility();
     testSearchRanking();
+    testRecentlyAddedCollection();
     testSafety();
     testManifest(signedJar.getParentFile());
     testTypedCatalogContract();
@@ -79,6 +87,15 @@ public final class FdroidIndexClientTest {
     word.put("id", "org.example.other"); word.put("name", "Player NewPipe Edition");
     check(FdroidIndexClient.searchComparator("newpipe").compare(word, idMatch) < 0,
         "name word match precedes summary match");
+  }
+
+  private static void testRecentlyAddedCollection() {
+    java.util.Map<String,Object> old=new java.util.LinkedHashMap<>();old.put("id","org.example.old");old.put("added",100L);
+    java.util.Map<String,Object> newest=new java.util.LinkedHashMap<>();newest.put("id","org.example.newest");newest.put("added",300L);
+    java.util.Map<String,Object> middle=new java.util.LinkedHashMap<>();middle.put("id","org.example.middle");middle.put("added","200");
+    java.util.List<java.util.Map<String,Object>> sorted=FdroidCatalog.recentlyAdded(java.util.List.of(old,newest,middle));
+    check("org.example.newest".equals(sorted.get(0).get("id"))&&"org.example.middle".equals(sorted.get(1).get("id"))&&"org.example.old".equals(sorted.get(2).get("id")),
+        "new collection is ordered by added timestamp from the cached index");
   }
   private static void testLargeStreamingIndex(File file) throws Exception {
     check(file.length() >= 100L * 1024 * 1024, "synthetic index is at least 100 MiB");

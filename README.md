@@ -38,3 +38,7 @@ No image build, QEMU boot or device installation is authorized for this task. En
 4. Add a repository share URL with its independently obtained fingerprint. Confirm valid verification; reject a missing fingerprint and mark a wrong fingerprint/offline repository broken. Check logcat tag `FdroidSource` for contextual errors. Open an `fdroidrepos:` link and verify it only opens repository review.
 5. Install a small app; confirm progress, one store-owned full-install session and eventual completion. Repeat with a base plus splits, then update to a higher matching-signer version. Verify installed package/splits and empty temporary download cache. Corrupt a fixture APK/hash and confirm no commit is sent.
 6. Uninstall through the store and confirm the generic receiver completes the operation. Test an offline install and denied/cancelled package confirmation: one failure result, no stale busy indicator. Verify the plugin itself has no install/delete privilege.
+
+The revision 2 `new` collection orders compatible entries by their index
+`added` timestamp, newest first. `popular` is an empty page because F-Droid
+exposes no popularity ranking.

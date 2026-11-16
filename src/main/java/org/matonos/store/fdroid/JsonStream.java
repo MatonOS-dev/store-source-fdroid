@@ -37,7 +37,7 @@ final class JsonStream {
   private Object packageValue() throws IOException {
     space(); if (peek() != '{') return value();
     take(); Map<String,Object> result=new LinkedHashMap<>(); space(); if(peek()=='}'){take();return result;}
-    while(true){String k=string();space();expect(':');space();if("metadata".equals(k)||"versions".equals(k))result.put(k,value());else skip();space();if(peek()=='}'){take();return result;}expect(',');space();}
+    while(true){String k=string();space();expect(':');space();if("metadata".equals(k)||"versions".equals(k)||"added".equals(k))result.put(k,value());else skip();space();if(peek()=='}'){take();return result;}expect(',');space();}
   }
   private void skip() throws IOException {
     space(); int c=peek();

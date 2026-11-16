@@ -51,6 +51,10 @@ public final class FdroidSourceService extends Service {
     @Override public AppListing[] search(String term, int offset, int limit) {
       return call("search", () -> listingArray(FdroidCatalog.page(listings(queryCatalogue("search", term, offset)), offset, limit)));
     }
+    @Override public AppListing[] collection(String kind, int offset, int limit) {
+      if (!"new".equals(kind)) return new AppListing[0];
+      return call("collection kind=" + kind, () -> listingArray(FdroidCatalog.page(listings(queryCatalogue("new", "", offset)), offset, limit)));
+    }
     @Override public AppDetails details(String id, String repo) {
       return call("details id=" + id + " repo=" + repo, () -> detailsObject(find(id, repo)));
     }
@@ -163,15 +167,17 @@ public final class FdroidSourceService extends Service {
     for(int repoIndex=0;repoIndex<enabled.size();repoIndex++) {
       Map<String,Object> repo=enabled.get(repoIndex); String url=text(repo.get("url"));
       try { List<Map<String,Object>> apps=futures.get(repoIndex).get(); repositories.setBroken(url,false); succeeded++;
-        for(Map<String,Object> app:apps){decorate(app,url); app.put("repo",url); if(!mode.equals("search"))app.put("installed",true); result.add(app);}
+        for(Map<String,Object> app:apps){decorate(app,url); app.put("repo",url); if(mode.equals("installed")||mode.equals("updates"))app.put("installed",true); result.add(app);}
       } catch(Exception error) { Throwable cause=error instanceof java.util.concurrent.ExecutionException ? error.getCause() : error; Exception failure=cause instanceof Exception?(Exception)cause:new Exception(cause); Log.e(TAG,mode+" repository="+url+" failed",failure); repositories.setBroken(url,true); last=failure; }
     }
+    if("new".equals(mode)) result=FdroidCatalog.recentlyAdded(result);
     if(succeeded==0 && last!=null) throw last; return result;
   }
   private List<Map<String,Object>> queryRepository(Map<String,Object> repo,String mode,String term,List<Map<String,Object>> installed,List<String> names) throws Exception {
       String url=text(repo.get("url")), fingerprint=text(repo.get("fingerprint")); List<Map<String,Object>> apps;
       if(mode.equals("updates")) apps=client.updatesCatalogue(getFilesDir(),url,fingerprint,installed);
       else if(mode.equals("installed")) apps=client.installedCatalogue(getFilesDir(),url,fingerprint,names);
+      else if(mode.equals("new")) apps=client.search(getFilesDir(),url,fingerprint,"");
       else apps=client.search(getFilesDir(),url,fingerprint,term);
       List<Map<String,Object>> accepted=new ArrayList<>();
       for(Map<String,Object> app:FdroidCatalog.candidates(apps,url)) {
