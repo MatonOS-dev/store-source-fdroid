@@ -360,6 +360,7 @@ public final class FdroidIndexClient {
       anti.put("id", entry.getKey()); anti.put("reason", localized(entry.getValue())); antiFeatures.add(anti);
     }
     result.put("rawAntiFeatures", antiFeatures);
+    result.put("antiFeatures", antiFeatures);
     List<String> permissions = new ArrayList<>();
     Object uses = manifest.get("usesPermission");
     if (uses instanceof List) for (Object value : (List<?>) uses) {

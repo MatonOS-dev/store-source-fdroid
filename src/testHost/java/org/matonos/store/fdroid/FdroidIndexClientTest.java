@@ -21,6 +21,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public final class FdroidIndexClientTest {
   public static void main(String[] args) throws Exception {
+    testMarkdownConversion();
     if (args.length == 1) { testLargeStreamingIndex(new File(args[0])); return; }
     File signedJar = new File(args[0]);
     File certFile = new File(args[1]);
@@ -70,6 +71,10 @@ public final class FdroidIndexClientTest {
     System.out.println("PASS: signed JAR, signer pin, index hash, index parser, APK hash before commit, update signer/version checks, repository trust/removal");
   }
 
+  private static void testMarkdownConversion() {
+    String converted=FdroidMarkdown.convert("<p>Thunderbird <strong>mail</strong></p><p>Privacy &amp; security</p><ul><li>Open source</li><li><a href=\"https://example.org\">Website</a></li></ul>");
+    check(converted.contains("Thunderbird **mail**")&&converted.contains("\n\nPrivacy & security")&&converted.contains("- Open source")&&converted.contains("[Website](https://example.org)"),"F-Droid HTML description converts to CommonMark");
+  }
   private static void testSearchRanking() {
     java.util.Map<String,Object> bendy = new java.util.LinkedHashMap<>();
     bendy.put("id", "com.example.bendystraw"); bendy.put("name", "BendyStraw");

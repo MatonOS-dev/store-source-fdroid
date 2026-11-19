@@ -44,7 +44,7 @@ public final class FdroidSourceService extends Service {
   private final ISoftwareSource.Stub binder = new ISoftwareSource.Stub() {
     @Override public SourceInfo info() {
       SourceInfo info = new SourceInfo(); info.version = ISoftwareSource.VERSION; info.revision = ISoftwareSource.REVISION;
-      info.name = "fdroid"; info.label = "F-Droid";
+      info.name = "fdroid"; info.label = "Android apps"; info.description = "Android applications from signed software repositories."; info.addRepoFields = new String[]{"fingerprint:Signing fingerprint (SHA-256)"};
       info.capabilities = ISoftwareSource.CAP_REPOSITORIES | ISoftwareSource.CAP_ANTI_FEATURES | ISoftwareSource.CAP_PERMISSIONS;
       return info;
     }
@@ -122,7 +122,7 @@ public final class FdroidSourceService extends Service {
     List<Map<String, Object>> result = new ArrayList<>();
     for (Map<String, Object> app : apps) {
       Map<String, Object> row = new LinkedHashMap<>();
-      for (String key : new String[]{"id", "packageName", "name", "summary", "icon", "developer", "installed", "versionName", "repo"}) if (app.containsKey(key)) row.put(key, app.get(key));
+      for (String key : new String[]{"id", "packageName", "name", "summary", "icon", "developer", "installed", "versionName", "repo", "added", "antiFeatures"}) if (app.containsKey(key)) row.put(key, app.get(key));
       result.add(row);
     }
     return result;
@@ -134,7 +134,7 @@ public final class FdroidSourceService extends Service {
       item.id = text(row.get("id")); item.name = text(row.get("name")); item.summary = text(row.get("summary"));
       item.icon = text(row.get("icon")); item.developer = text(row.get("developer"));
       item.installed = Boolean.TRUE.equals(row.get("installed")); item.repo = text(row.get("repo"));
-      item.versionName = nullable(row.get("versionName")); item.packageName = nullable(row.get("packageName")); result[i] = item;
+      item.versionName = nullable(row.get("versionName")); item.packageName = nullable(row.get("packageName")); item.badges = badges(row); result[i] = item;
       item.added = Math.max(0, number(row.get("added")));
     }
     return result;
@@ -143,16 +143,26 @@ public final class FdroidSourceService extends Service {
     Repo[] result = new Repo[rows.size()];
     for (int i = 0; i < rows.size(); i++) { Map<String, Object> row = rows.get(i); Repo item = new Repo();
       item.id = text(row.get("id")); item.url = text(row.get("url")); item.label = text(row.get("label"));
-      item.official = Boolean.TRUE.equals(row.get("official")); item.broken = Boolean.TRUE.equals(row.get("broken")); result[i] = item; }
+      item.official = Boolean.TRUE.equals(row.get("official")); item.broken = Boolean.TRUE.equals(row.get("broken")); item.builtIn=item.official; item.removable=!item.official; item.description=nullable(row.get("description")); result[i] = item; }
     return result;
   }
   private AppDetails detailsObject(Map<String, Object> app) {
     AppDetails result = new AppDetails(); result.listing = listingArray(Collections.singletonList(app))[0];
-    result.description = text(app.get("description")); result.screenshots = strings(app.get("screenshots"));
+    result.description = text(app.get("description")); result.descriptionMarkdown = FdroidMarkdown.convert(result.description); result.screenshots = strings(app.get("screenshots"));
     result.permissions = strings(app.get("permissions")); result.license = nullable(app.get("license")); result.homepage = nullable(app.get("homepage"));
     result.downloadSize = number(app.get("downloadSize")); result.installedSize = number(app.get("installedSize"));
     result.antiFeatures = antiFeatures(app.get("antiFeatures")); result.safety = safety(app.get("safety"));
     return result;
+  }
+  private AppBadge[] badges(Map<String,Object> row) {
+    List<AppBadge> result=new ArrayList<>();long added=number(row.get("added"));
+    if(added>0&&System.currentTimeMillis()/1000L-added<=30L*86400){AppBadge badge=new AppBadge();badge.id="new";badge.label="New";badge.icon="fiber_new";result.add(badge);}
+    List<?> features=row.get("antiFeatures") instanceof List?(List<?>)row.get("antiFeatures"):Collections.emptyList();
+    boolean proprietary=false;
+    for(Object value:features){if(!(value instanceof Map))continue;Map<?,?> feature=(Map<?,?>)value;String id=text(feature.get("id"));String lower=id.toLowerCase(Locale.ROOT);if(lower.contains("nonfree")||lower.contains("non-free"))proprietary=true;
+      AppBadge badge=new AppBadge();badge.id=id.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9-]","-");badge.label=text(feature.get("title")).isEmpty()?id:text(feature.get("title"));badge.icon=lower.contains("track")?"visibility":lower.contains("ad")?"ads_click":"warning";result.add(badge);}
+    if(!proprietary){AppBadge badge=new AppBadge();badge.id="open-source";badge.label="Open source";badge.icon="code";result.add(badge);}
+    return result.toArray(new AppBadge[0]);
   }
   private AntiFeature[] antiFeatures(Object raw) {
     if (!(raw instanceof List)) return new AntiFeature[0]; List<?> values = (List<?>)raw; AntiFeature[] result = new AntiFeature[values.size()];
