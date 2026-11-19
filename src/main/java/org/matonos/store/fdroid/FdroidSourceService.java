@@ -22,6 +22,7 @@ public final class FdroidSourceService extends Service {
   private static final String TAG = "FdroidSource";
   private FdroidRepositories repositories;
   private FdroidIndexClient client;
+  private Set<String> knownApps = Collections.emptySet();
   private final Map<String, InstallTask> installs = new ConcurrentHashMap<>();
   private final OperationTable operations = new OperationTable();
   private final Map<String, List<Map<String,Object>>> queryResults = new ConcurrentHashMap<>();
@@ -32,6 +33,21 @@ public final class FdroidSourceService extends Service {
     Set<String> features = new HashSet<>();
     for (FeatureInfo f : getPackageManager().getSystemAvailableFeatures()) if (f.name != null) features.add(f.name);
     client = new FdroidIndexClient(37, Arrays.asList(Build.SUPPORTED_ABIS), features);
+    knownApps = loadKnownApps();
+  }
+
+  private Set<String> loadKnownApps() {
+    Set<String> result = new HashSet<>();
+    try (BufferedReader reader = new BufferedReader(new InputStreamReader(getAssets().open("known-apps.txt"), "UTF-8"))) {
+      String line;
+      while ((line = reader.readLine()) != null) {
+        String id = line.split("#", 2)[0].trim().toLowerCase(Locale.ROOT);
+        if (!id.isEmpty()) result.add(id);
+      }
+    } catch (Exception error) {
+      Log.e(TAG, "Loading curated known-app popularity IDs failed; continuing without curation", error);
+    }
+    return result;
   }
 
   private interface Call<T> { T run() throws Exception; }
@@ -106,7 +122,7 @@ public final class FdroidSourceService extends Service {
     @Override public boolean running(String op) { return operations.running(op); }
     @Override public PopularApp[] getPopularApps(int limit) {
       return call("popularApps", () -> {
-        List<Map<String,Object>> rows = FdroidCatalog.popular(queryCatalogue("search", "", 0), limit);
+        List<Map<String,Object>> rows = FdroidCatalog.popular(queryCatalogue("search", "", 0), limit, knownApps);
         List<PopularApp> result = new ArrayList<>();
         for (Map<String,Object> row : rows) {
           PopularApp item = new PopularApp(); item.app = listingArray(Collections.singletonList(row))[0];

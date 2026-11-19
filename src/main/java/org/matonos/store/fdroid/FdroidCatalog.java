@@ -27,9 +27,10 @@ final class FdroidCatalog {
     return result;
   }
 
-  /** F-Droid has no install counts: combine known-app curation (0–4), release history (0–2.5),
-   * catalogue longevity (0–1), recent update (0–1.5), and a 0–2 anti-feature penalty. */
-  static List<Map<String,Object>> popular(List<Map<String,Object>> apps, int limit) {
+  /** F-Droid has no install counts or popularity rank: combine curation (0–6),
+   * release history (0–1.5), catalogue longevity (0–0.75), recent update (0–1),
+   * and a 0–2 anti-feature penalty. */
+  static List<Map<String,Object>> popular(List<Map<String,Object>> apps, int limit, java.util.Set<String> knownApps) {
     if (limit <= 0) throw new IllegalArgumentException("limit must be positive");
     long now = System.currentTimeMillis() / 1000L;
     List<Map<String,Object>> rows = new ArrayList<>();
@@ -38,11 +39,11 @@ final class FdroidCatalog {
       long added = added(app.get("added"));
       int count = app.get("versionCount") instanceof Number ? ((Number)app.get("versionCount")).intValue() : 1;
       String id = text(app.get("id")).toLowerCase(java.util.Locale.ROOT);
-      double known = isKnownApp(id) ? 4.0 : 0.0;
-      double history = Math.min(2.5, Math.log1p(Math.max(0, count - 1)) * 0.9);
-      double longevity = added <= 0 ? 0 : Math.min(1.0, Math.max(0, (now - added) / (5.0 * 365 * 86400)));
+      double known = isKnownApp(id, knownApps) ? 6.0 : 0.0;
+      double history = Math.min(1.5, Math.log1p(Math.max(0, count - 1)) * 0.55);
+      double longevity = added <= 0 ? 0 : Math.min(0.75, Math.max(0, (now - added) / (5.0 * 365 * 86400) * 0.75));
       long updated = added(app.get("lastUpdated"));
-      double freshness = updated <= 0 ? 0 : 1.5 * Math.max(0, 1.0 - Math.max(0, now - updated) / (2.0 * 365 * 86400));
+      double freshness = updated <= 0 ? 0 : Math.max(0, 1.0 - Math.max(0, now - updated) / (2.0 * 365 * 86400));
       Object anti = app.get("antiFeatures");
       int antiCount = anti instanceof List ? ((List<?>)anti).size() : 0;
       double penalty = Math.min(2.0, antiCount * 0.75);
@@ -53,21 +54,10 @@ final class FdroidCatalog {
     return new ArrayList<>(rows.subList(0, Math.min(limit, rows.size())));
   }
 
-  private static boolean isKnownApp(String id) {
-    return id.equals("org.fdroid.fdroid") || id.startsWith("org.mozilla.fennec")
-        || id.equals("org.mozilla.firefox") || id.equals("us.spotco.fennec_dos")
-        || id.startsWith("org.torproject.android") || id.equals("org.thoughtcrime.securesms")
-        || id.equals("im.molly.app") || id.equals("org.schabi.newpipe")
-        || id.equals("org.videolan.vlc") || id.equals("org.kde.kdeconnect_tp")
-        || id.startsWith("app.organicmaps") || id.equals("net.osmand.plus")
-        || id.equals("de.danoeh.antennapod") || id.equals("com.x8bit.bitwarden")
-        || id.equals("ch.protonvpn.android") || id.equals("eu.faircode.email")
-        || id.equals("com.nutomic.syncthingandroid") || id.equals("im.vector.app")
-        || id.equals("com.termux") || id.equals("com.kunzisoft.keepass.libre")
-        || id.equals("at.bitfire.davdroid") || id.equals("com.keylesspalace.tusky")
-        || id.startsWith("ch.deletescape.lawnchair.plah")
-        || id.equals("com.simplemobiletools.calendar.pro")
-        || id.equals("com.retroarch");
+  private static boolean isKnownApp(String id, java.util.Set<String> knownApps) {
+    if (knownApps.contains(id)) return true;
+    for (String prefix : knownApps) if (prefix.endsWith("*") && id.startsWith(prefix.substring(0, prefix.length() - 1))) return true;
+    return false;
   }
 
   private static long added(Object value) {
