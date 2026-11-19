@@ -123,7 +123,7 @@ public final class FdroidSourceService extends Service {
         catch (Exception error) { return error.getMessage(); }
       }
       if (id != null && id.startsWith("repository:") && value == null) {
-        try { repositories.remove(id.substring("repository:".length())); return null; }
+        try { repositories.remove(id.substring("repository:".length())); synchronized (queryResults) { queryResults.clear(); } return null; }
         catch (Exception error) { return error.getMessage(); }
       }
       return "Unknown or read-only setting";
