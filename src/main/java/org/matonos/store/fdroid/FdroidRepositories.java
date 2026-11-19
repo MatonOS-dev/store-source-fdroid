@@ -47,10 +47,31 @@ public final class FdroidRepositories {
   }
   private Map<String, Object> repo(String url, String fingerprint, boolean official) {
     Map<String, Object> r = new LinkedHashMap<>();
-    r.put("id", url); r.put("url", url); r.put("label", official ? "F-Droid (built in)" : FdroidRepository.displayHost(url));
-    r.put("fingerprint", fingerprint); r.put("official", official); r.put("broken", values("broken").contains(url)); return r;
+    r.put("id", url); r.put("url", url); r.put("label", official ? "F-Droid (built in)" : labels().getOrDefault(url, FdroidRepository.displayHost(url)));
+    r.put("fingerprint", fingerprint); r.put("official", official); r.put("broken", values("broken").contains(url));
+    r.put("enabled", !values("disabled").contains(url)); r.put("appCount", prefs.getInt("app-count:" + url, -1));
+    r.put("lastRefreshed", prefs.getLong("last-refreshed:" + url, 0)); return r;
+  }
+  public synchronized void setEnabled(String id, boolean enabled) {
+    Map<String,Object> repository = null;
+    for (Map<String,Object> candidate : list()) if (id.equals(candidate.get("id"))) repository = candidate;
+    if (repository == null) throw new IllegalArgumentException("Unknown repository " + id);
+    Set<String> disabled = values("disabled");
+    if (enabled) disabled.remove(id); else disabled.add(id);
+    save(prefs.edit().putStringSet("disabled", disabled));
+  }
+  public synchronized void markRefreshed(String url, int appCount) {
+    if (!prefs.edit().putInt("app-count:" + url, appCount).putLong("last-refreshed:" + url, System.currentTimeMillis() / 1000L).commit())
+      throw new IllegalStateException("Cannot save repository refresh metadata for " + url);
+  }
+  public synchronized void markChecked(String url) {
+    if (!prefs.edit().putLong("last-refreshed:" + url, System.currentTimeMillis() / 1000L).commit())
+      throw new IllegalStateException("Cannot save repository refresh time for " + url);
   }
   public synchronized String add(String shareUrl) {
+    return add(shareUrl, "");
+  }
+  public synchronized String add(String shareUrl, String name) {
     list();
     Uri uri = Uri.parse(shareUrl);
     String fingerprint = FdroidRepository.normalizeFingerprint(uri.getQueryParameter("fingerprint"));
@@ -58,18 +79,25 @@ public final class FdroidRepositories {
     if (OFFICIAL_URL.equals(url)) throw new IllegalArgumentException("The built-in F-Droid repository is already enabled");
     Set<String> trusted = values("trusted"); trusted.removeIf(v -> v.startsWith(url + "\t")); trusted.add(url + "\t" + fingerprint);
     Set<String> broken = values("broken"); broken.add(url);
-    save(prefs.edit().putStringSet("trusted", trusted).putStringSet("broken", broken)); return url;
+    Set<String> labels = values("labels"); labels.removeIf(v -> v.startsWith(url + "\t")); if (name != null && !name.trim().isEmpty()) labels.add(url + "\t" + name.trim());
+    save(prefs.edit().putStringSet("trusted", trusted).putStringSet("broken", broken).putStringSet("labels", labels)); return url;
   }
   public synchronized void remove(String id) {
     list(); String url = FdroidRepository.normalizeUrl(id);
     if (OFFICIAL_URL.equals(url)) throw new IllegalArgumentException("The built-in F-Droid repository cannot be removed");
     Set<String> trusted = values("trusted"); trusted.removeIf(v -> v.startsWith(url + "\t"));
     Set<String> broken = values("broken"); broken.remove(url);
-    save(prefs.edit().putStringSet("trusted", trusted).putStringSet("broken", broken));
+    Set<String> labels = values("labels"); labels.removeIf(v -> v.startsWith(url + "\t"));
+    save(prefs.edit().putStringSet("trusted", trusted).putStringSet("broken", broken).putStringSet("labels", labels));
   }
   public synchronized void setBroken(String url, boolean broken) {
     Set<String> values = values("broken"); if (broken) values.add(url); else values.remove(url);
     save(prefs.edit().putStringSet("broken", values));
+  }
+  private Map<String,String> labels() {
+    Map<String,String> result = new HashMap<>();
+    for (String value : values("labels")) { String[] parts = value.split("\t", 2); if (parts.length == 2) result.put(parts[0], parts[1]); }
+    return result;
   }
   private void save(SharedPreferences.Editor editor) { if (!editor.commit()) throw new IllegalStateException("Cannot persist trusted repositories"); }
 }

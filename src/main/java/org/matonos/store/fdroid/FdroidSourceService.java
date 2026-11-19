@@ -68,8 +68,10 @@ public final class FdroidSourceService extends Service {
     @Override public Repo[] repos(int offset, int limit) {
       return call("repos", () -> repoArray(FdroidCatalog.page(repositories.list(), offset, limit)));
     }
-    @Override public void addRepo(String url) { call("addRepo", () -> {
-      String repo = repositories.add(url);
+    @Override public void addRepo(String url) { addRepoInternal("", url); }
+    @Override public void addRepoNamed(String name, String url) { addRepoInternal(name, url); }
+    private void addRepoInternal(String name, String url) { call("addRepo", () -> {
+      String repo = repositories.add(url, name);
       for (Map<String, Object> r : repositories.list()) if (repo.equals(r.get("url"))) {
         try { client.search(getFilesDir(), repo, text(r.get("fingerprint")), ""); repositories.setBroken(repo, false); }
         catch (Exception error) { Log.e(TAG, "Verifying added repository " + repo + " failed", error); throw error; }
@@ -97,6 +99,22 @@ public final class FdroidSourceService extends Service {
       if (thread != null) thread.interrupt();
     }
     @Override public boolean running(String op) { return operations.running(op); }
+    @Override public PopularApp[] getPopularApps(int limit) {
+      return call("popularApps", () -> {
+        List<Map<String,Object>> rows = FdroidCatalog.popular(queryCatalogue("search", "", 0), limit);
+        List<PopularApp> result = new ArrayList<>();
+        for (Map<String,Object> row : rows) {
+          PopularApp item = new PopularApp(); item.app = listingArray(Collections.singletonList(row))[0];
+          item.score = ((Number)row.get("popularityScore")).doubleValue(); result.add(item);
+        }
+        return result.toArray(new PopularApp[0]);
+      });
+    }
+    @Override public void setRepoEnabled(String id, boolean enabled) {
+      call("setRepoEnabled id=" + id + " enabled=" + enabled, () -> {
+        repositories.setEnabled(id, enabled); synchronized (queryResults) { queryResults.clear(); } return "";
+      });
+    }
   };
   @Override public IBinder onBind(Intent intent) { return binder; }
 
@@ -117,6 +135,7 @@ public final class FdroidSourceService extends Service {
       item.icon = text(row.get("icon")); item.developer = text(row.get("developer"));
       item.installed = Boolean.TRUE.equals(row.get("installed")); item.repo = text(row.get("repo"));
       item.versionName = nullable(row.get("versionName")); item.packageName = nullable(row.get("packageName")); result[i] = item;
+      item.added = Math.max(0, number(row.get("added")));
     }
     return result;
   }
@@ -160,13 +179,15 @@ public final class FdroidSourceService extends Service {
     List<Map<String, Object>> result = new ArrayList<>();
     List<Map<String, Object>> installed = mode.equals("search") ? Collections.emptyList() : installedVersions();
     List<String> names = new ArrayList<>(); for (Map<String, Object> p : installed) names.add(text(p.get("packageName")));
-    List<Map<String,Object>> enabled=repositories.list();
+    List<Map<String,Object>> enabled=new ArrayList<>();
+    for (Map<String,Object> repository : repositories.list()) if (Boolean.TRUE.equals(repository.get("enabled"))) enabled.add(repository);
     List<Future<List<Map<String,Object>>>> futures=FdroidCatalog.submitOrdered(enabled,repoQueries,
       repo->queryRepository(repo,mode,term,installed,names));
     int succeeded=0; Exception last=null;
     for(int repoIndex=0;repoIndex<enabled.size();repoIndex++) {
       Map<String,Object> repo=enabled.get(repoIndex); String url=text(repo.get("url"));
-      try { List<Map<String,Object>> apps=futures.get(repoIndex).get(); repositories.setBroken(url,false); succeeded++;
+      try { List<Map<String,Object>> apps=futures.get(repoIndex).get(); repositories.setBroken(url,false);
+        if("new".equals(mode)||("search".equals(mode)&&(term==null||term.isEmpty())))repositories.markRefreshed(url,apps.size());else repositories.markChecked(url);succeeded++;
         for(Map<String,Object> app:apps){decorate(app,url); app.put("repo",url); if(mode.equals("installed")||mode.equals("updates"))app.put("installed",true); result.add(app);}
       } catch(Exception error) { Throwable cause=error instanceof java.util.concurrent.ExecutionException ? error.getCause() : error; Exception failure=cause instanceof Exception?(Exception)cause:new Exception(cause); Log.e(TAG,mode+" repository="+url+" failed",failure); repositories.setBroken(url,true); last=failure; }
     }

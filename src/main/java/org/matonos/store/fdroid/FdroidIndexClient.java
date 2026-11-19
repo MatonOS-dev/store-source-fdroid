@@ -384,13 +384,13 @@ public final class FdroidIndexClient {
     String result = text(localized);
     return result;
   }
-  /** Details render at 84 dp; request at least 2x that size and prefer the
-   * smallest available image that meets it, avoiding needless oversized fetches. */
+  /** Details render at 84 dp; use the highest available density at or above
+   * 2x that size, then let the image renderer downsample with filtering. */
   private static String bestIcon(Map<String, Object> metadata) {
     String iconv2 = localized(metadata.get("iconv2"));
     if (!iconv2.isEmpty()) return iconv2;
     final int targetPixels = 168;
-    Map<Integer, String> sized = new java.util.TreeMap<>();
+    java.util.TreeMap<Integer, String> sized = new java.util.TreeMap<>();
     Object icons = metadata.get("icons");
     Map<String, Object> allVariants = new java.util.LinkedHashMap<>(map(icons));
     for (Map.Entry<String, Object> entry : metadata.entrySet()) if (entry.getKey().startsWith("icons-")) allVariants.putIfAbsent(entry.getKey().substring(6), entry.getValue());
@@ -401,8 +401,8 @@ public final class FdroidIndexClient {
         if (pixels > 0 && !path.isEmpty()) sized.put(pixels, path);
       } catch (NumberFormatException ignored) { }
     }
-    for (Map.Entry<Integer, String> entry : sized.entrySet()) if (entry.getKey() >= targetPixels) return entry.getValue();
-    if (!sized.isEmpty()) return ((java.util.TreeMap<Integer, String>) sized).lastEntry().getValue();
+    for (Map.Entry<Integer, String> entry : sized.descendingMap().entrySet()) if (entry.getKey() >= targetPixels) return entry.getValue();
+    if (!sized.isEmpty()) return sized.lastEntry().getValue();
     return localized(metadata.get("icon"));
   }
   private static String fallback(String value, String other) { return value.isEmpty() ? other : value; }

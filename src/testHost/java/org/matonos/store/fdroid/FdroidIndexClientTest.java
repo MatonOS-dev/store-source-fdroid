@@ -39,7 +39,7 @@ public final class FdroidIndexClientTest {
     java.util.Map<String, Object> app = client.detailsFromParsedIndex(parsed, "org.example.demo");
     check("Demo App".equals(app.get("name")), "parser name");
     check("A small fixture".equals(app.get("summary")), "parser summary");
-    check("https://f-droid.org/repo/icons/demo-192.png".equals(app.get("icon")), "icon chooses the smallest source density meeting 2x row size instead of the undersized default");
+    check("https://f-droid.org/repo/icons/demo-640.png".equals(app.get("icon")), "icon chooses the highest source density meeting 2x row size instead of the undersized default");
     java.util.Map<String,Object> v2IconIndex = client.parseIndex(fixture.replace("\"icons-192\"", "\"iconv2\""));
     java.util.Map<String,Object> v2IconApp = client.detailsFromParsedIndex(v2IconIndex, "org.example.demo");
     check("https://f-droid.org/repo/icons/demo-192.png".equals(v2IconApp.get("icon")), "index-v2 iconv2 listing asset is preferred");
@@ -60,6 +60,7 @@ public final class FdroidIndexClientTest {
     testCompatibility();
     testSearchRanking();
     testRecentlyAddedCollection();
+    testPopularityScoring();
     testSafety();
     testManifest(signedJar.getParentFile());
     testTypedCatalogContract();
@@ -100,6 +101,15 @@ public final class FdroidIndexClientTest {
     java.util.List<java.util.Map<String,Object>> sorted=FdroidCatalog.recentlyAdded(java.util.List.of(old,newest,middle));
     check("org.example.newest".equals(sorted.get(0).get("id"))&&"org.example.middle".equals(sorted.get(1).get("id"))&&"org.example.old".equals(sorted.get(2).get("id")),
         "new collection is ordered by added timestamp from the cached index");
+  }
+  private static void testPopularityScoring() {
+    long now=System.currentTimeMillis()/1000L;
+    java.util.Map<String,Object> known=new java.util.LinkedHashMap<>();known.put("id","org.mozilla.firefox");known.put("added",now);known.put("versions",java.util.List.of(1,2,3,4,5,6,7,8));
+    java.util.Map<String,Object> quiet=new java.util.LinkedHashMap<>();quiet.put("id","org.example.quiet");quiet.put("added",now-3L*365*86400);quiet.put("versions",java.util.List.of(1));
+    java.util.List<java.util.Map<String,Object>> scored=FdroidCatalog.popular(java.util.List.of(quiet,known),2);
+    check(scored.size()==2&&"org.mozilla.firefox".equals(scored.get(0).get("id")),"F-Droid popularity orders recent, versioned and well-known signal above stale apps");
+    check(((Number)scored.get(0).get("popularityScore")).doubleValue()==10.0,"F-Droid backend score clamps the top signal to 10.0");
+    check(((Number)scored.get(1).get("popularityScore")).doubleValue()==0.0,"stale app without history or known signal receives 0.0");
   }
   private static void testLargeStreamingIndex(File file) throws Exception {
     check(file.length() >= 100L * 1024 * 1024, "synthetic index is at least 100 MiB");

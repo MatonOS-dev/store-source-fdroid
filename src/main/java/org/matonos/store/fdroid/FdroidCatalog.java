@@ -27,6 +27,27 @@ final class FdroidCatalog {
     return result;
   }
 
+  /** Heuristic score: 0–4 recency (last 2 years), 0–3 catalogue versions, 0–3 known app signal. */
+  static List<Map<String,Object>> popular(List<Map<String,Object>> apps, int limit) {
+    if (limit <= 0) throw new IllegalArgumentException("limit must be positive");
+    long now = System.currentTimeMillis() / 1000L;
+    List<Map<String,Object>> rows = new ArrayList<>();
+    for (Map<String,Object> app : apps) {
+      Map<String,Object> row = new LinkedHashMap<>(app);
+      long added = added(app.get("added"));
+      double recency = added <= 0 ? 0 : 4.0 * Math.max(0, 1.0 - (now - added) / (2.0 * 365 * 86400));
+      Object versions = app.get("versions");
+      int count = versions instanceof List ? ((List<?>)versions).size() : 1;
+      double history = Math.min(3.0, Math.log1p(Math.max(0, count - 1)) * 1.5);
+      String id = text(app.get("id")).toLowerCase(java.util.Locale.ROOT);
+      double known = (id.contains("firefox") || id.contains("signal") || id.contains("vlc") || id.contains("kde") || id.contains("f-droid")) ? 3.0 : 0.0;
+      double score = Math.round(Math.min(10, recency + history + known) * 10.0) / 10.0;
+      row.put("popularityScore", score); rows.add(row);
+    }
+    rows.sort((a,b) -> { int score = Double.compare(((Number)b.get("popularityScore")).doubleValue(), ((Number)a.get("popularityScore")).doubleValue()); return score != 0 ? score : text(a.get("id")).compareToIgnoreCase(text(b.get("id"))); });
+    return new ArrayList<>(rows.subList(0, Math.min(limit, rows.size())));
+  }
+
   private static long added(Object value) {
     if (value instanceof Number) return ((Number)value).longValue();
     if (value instanceof String) try { return Long.parseLong((String)value); } catch (NumberFormatException ignored) { return 0; }
