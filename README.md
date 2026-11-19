@@ -40,9 +40,15 @@ No image build, QEMU boot or device installation is authorized for this task. En
 6. Uninstall through the store and confirm the generic receiver completes the operation. Test an offline install and denied/cancelled package confirmation: one failure result, no stale busy indicator. Verify the plugin itself has no install/delete privilege.
 
 The `new` collection orders compatible entries by their index `added`
-timestamp, newest first. The Popular score is a heuristic (F-Droid publishes
-no download counts): up to 4 points for recency over a two-year window, up to
-3 points for catalogue version history using `1.5 × ln(versions)`, and 3
-points for well-known app signals (Firefox, Signal, VLC, KDE, F-Droid). The
-sum is clamped to 0–10 and rounded to one decimal. Unknown signals receive no
-bonus; scores are still stable for equivalent index metadata.
+timestamp, newest first. F-Droid publishes no download counts, so Popular uses
+a 0–10 heuristic: 4 points for a curated set of widely used F-Droid apps
+(Firefox/Mull/Tor Browser, Signal, NewPipe, VLC, KDE Connect, Organic Maps,
+OsmAnd, AntennaPod, Bitwarden, Proton VPN, and other established tools); up
+to 2.5 for release history (`0.9 × ln(versionCount)`); up to 1 for catalogue
+age (five-year ramp); and up to 1.5 for an index `lastUpdated` within two
+years. Each anti-feature subtracts 0.75, capped at 2 points. Missing metadata
+contributes zero; the result is clamped to 0–10 and rounded to one decimal.
+The known-app points give familiar software a meaningful head start over
+recent niche packages, while history and freshness distinguish apps within
+the curated group. The store interleaves equal-score source results round-robin,
+so F-Droid does not dominate other enabled sources just by appearing first.

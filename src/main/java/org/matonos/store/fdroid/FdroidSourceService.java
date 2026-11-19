@@ -127,7 +127,7 @@ public final class FdroidSourceService extends Service {
     List<Map<String, Object>> result = new ArrayList<>();
     for (Map<String, Object> app : apps) {
       Map<String, Object> row = new LinkedHashMap<>();
-      for (String key : new String[]{"id", "packageName", "name", "summary", "icon", "developer", "installed", "versionName", "repo", "added", "antiFeatures", "repoOptions"}) if (app.containsKey(key)) row.put(key, app.get(key));
+      for (String key : new String[]{"id", "packageName", "name", "summary", "icon", "developer", "installed", "versionName", "repo", "added", "lastUpdated", "versionCount", "antiFeatures", "repoOptions"}) if (app.containsKey(key)) row.put(key, app.get(key));
       result.add(row);
     }
     return result;

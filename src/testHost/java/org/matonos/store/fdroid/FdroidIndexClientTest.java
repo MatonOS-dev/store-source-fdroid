@@ -109,12 +109,16 @@ public final class FdroidIndexClientTest {
   }
   private static void testPopularityScoring() {
     long now=System.currentTimeMillis()/1000L;
-    java.util.Map<String,Object> known=new java.util.LinkedHashMap<>();known.put("id","org.mozilla.firefox");known.put("added",now);known.put("versions",java.util.List.of(1,2,3,4,5,6,7,8));
-    java.util.Map<String,Object> quiet=new java.util.LinkedHashMap<>();quiet.put("id","org.example.quiet");quiet.put("added",now-3L*365*86400);quiet.put("versions",java.util.List.of(1));
+    java.util.Map<String,Object> known=new java.util.LinkedHashMap<>();known.put("id","org.mozilla.firefox");known.put("added",now-4L*365*86400);known.put("lastUpdated",now);known.put("versionCount",8);
+    java.util.Map<String,Object> quiet=new java.util.LinkedHashMap<>();quiet.put("id","org.example.quiet");quiet.put("added",now-6L*365*86400);quiet.put("lastUpdated",now);quiet.put("versionCount",1);
     java.util.List<java.util.Map<String,Object>> scored=FdroidCatalog.popular(java.util.List.of(quiet,known),2);
     check(scored.size()==2&&"org.mozilla.firefox".equals(scored.get(0).get("id")),"F-Droid popularity orders recent, versioned and well-known signal above stale apps");
-    check(((Number)scored.get(0).get("popularityScore")).doubleValue()==10.0,"F-Droid backend score clamps the top signal to 10.0");
-    check(((Number)scored.get(1).get("popularityScore")).doubleValue()==0.0,"stale app without history or known signal receives 0.0");
+    check(((Number)scored.get(0).get("popularityScore")).doubleValue()<=10.0&&((Number)scored.get(0).get("popularityScore")).doubleValue()>4.0,"known app and release history score within the 0–10 range");
+    check(((Number)scored.get(1).get("popularityScore")).doubleValue()==2.5,"recently updated, long-running app scores from catalogue age and freshness");
+    java.util.Map<String,Object> flagged=new java.util.LinkedHashMap<>(quiet);flagged.put("antiFeatures",java.util.List.of("Ads","Tracking"));
+    java.util.Map<String,Object> clean=new java.util.LinkedHashMap<>(quiet);clean.put("id","org.example.clean");clean.put("antiFeatures",java.util.List.of());
+    java.util.List<java.util.Map<String,Object>> safety=FdroidCatalog.popular(java.util.List.of(flagged,clean),2);
+    check("org.example.clean".equals(safety.get(0).get("id")),"anti-features reduce the popularity score");
   }
   private static void testLargeStreamingIndex(File file) throws Exception {
     check(file.length() >= 100L * 1024 * 1024, "synthetic index is at least 100 MiB");

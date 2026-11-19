@@ -352,7 +352,9 @@ public final class FdroidIndexClient {
     result.put("signerSha256", strings(map(manifest.get("signer")).get("sha256")));
     result.put("apkName", text(file.get("name"))); result.put("apkSha256", text(file.get("sha256"))); result.put("apkFiles", apkFiles);
     result.put("repository", "");
+    result.put("versionCount", versions.size());
     Object added=raw.get("added");if(added==null)added=metadata.get("added");if(added!=null)result.put("added",added);
+    Object lastUpdated=metadata.get("lastUpdated");if(lastUpdated==null)lastUpdated=raw.get("lastUpdated");if(lastUpdated!=null)result.put("lastUpdated",lastUpdated);
     // index-v2: per-version antiFeatures {id: {locale: reason}}; usesPermission [{name}].
     List<Map<String, String>> antiFeatures = new ArrayList<>();
     for (Map.Entry<String, Object> entry : map(latest.get("antiFeatures")).entrySet()) {
