@@ -34,11 +34,15 @@ public final class FdroidIndexClientTest {
     expectFailure(() -> client.verifyEntryJar(bytes(damaged), fingerprint), "damaged JAR signature");
     expectFailure(() -> client.verifyIndexHash("index data".getBytes(StandardCharsets.UTF_8), "00".repeat(32)), "index hash mismatch");
 
-    String fixture = "{\"packages\":{\"org.example.demo\":{\"added\":1712345678,\"metadata\":{\"name\":{\"en-US\":\"Demo App\"},\"summary\":{\"en-US\":\"A small fixture\"},\"icon\":{\"en-US\":{\"name\":\"/icons/demo.png\"}}},\"versions\":{\"abc\":{\"file\":[{\"name\":\"/demo.apk\",\"sha256\":\"abc123\"},{\"name\":\"/demo-split.apk\",\"sha256\":\"def456\"}],\"manifest\":{\"versionName\":\"1.2\",\"versionCode\":12,\"signer\":{\"sha256\":[\"aa11\"]}}}}}}}";
+    String fixture = "{\"packages\":{\"org.example.demo\":{\"added\":1712345678,\"metadata\":{\"name\":{\"en-US\":\"Demo App\"},\"summary\":{\"en-US\":\"A small fixture\"},\"icon\":{\"en-US\":{\"name\":\"/icons/demo.png\"}},\"icons-192\":{\"en-US\":{\"name\":\"/icons/demo-192.png\"}},\"icons-640\":{\"en-US\":{\"name\":\"/icons/demo-640.png\"}}},\"versions\":{\"abc\":{\"file\":[{\"name\":\"/demo.apk\",\"sha256\":\"abc123\"},{\"name\":\"/demo-split.apk\",\"sha256\":\"def456\"}],\"manifest\":{\"versionName\":\"1.2\",\"versionCode\":12,\"signer\":{\"sha256\":[\"aa11\"]}}}}}}}";
     java.util.Map<String, Object> parsed = client.parseIndex(fixture);
     java.util.Map<String, Object> app = client.detailsFromParsedIndex(parsed, "org.example.demo");
     check("Demo App".equals(app.get("name")), "parser name");
     check("A small fixture".equals(app.get("summary")), "parser summary");
+    check("https://f-droid.org/repo/icons/demo-192.png".equals(app.get("icon")), "icon chooses the smallest source density meeting 2x row size instead of the undersized default");
+    java.util.Map<String,Object> v2IconIndex = client.parseIndex(fixture.replace("\"icons-192\"", "\"iconv2\""));
+    java.util.Map<String,Object> v2IconApp = client.detailsFromParsedIndex(v2IconIndex, "org.example.demo");
+    check("https://f-droid.org/repo/icons/demo-192.png".equals(v2IconApp.get("icon")), "index-v2 iconv2 listing asset is preferred");
     check("/demo.apk".equals(app.get("apkName")), "parser APK name");
     check("abc123".equals(app.get("apkSha256")), "parser APK hash");
     check(((java.util.List<?>) app.get("apkFiles")).size() == 2, "parser split APK files");

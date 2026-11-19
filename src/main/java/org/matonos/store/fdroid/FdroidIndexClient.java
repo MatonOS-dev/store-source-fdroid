@@ -342,7 +342,7 @@ public final class FdroidIndexClient {
       }
     }
     if (apkFiles.isEmpty()) return null;
-    String icon = localized(metadata.get("icon"));
+    String icon = bestIcon(metadata);
     Map<String, Object> result = new LinkedHashMap<>();
     result.put("id", packageName); result.put("packageName", packageName); result.put("name", fallback(localized(metadata.get("name")), packageName));
     result.put("summary", localized(metadata.get("summary"))); result.put("icon", icon.isEmpty() ? "" : absolutePath(icon));
@@ -383,6 +383,27 @@ public final class FdroidIndexClient {
     if (localized instanceof Map) localized = map(localized).get("name");
     String result = text(localized);
     return result;
+  }
+  /** Details render at 84 dp; request at least 2x that size and prefer the
+   * smallest available image that meets it, avoiding needless oversized fetches. */
+  private static String bestIcon(Map<String, Object> metadata) {
+    String iconv2 = localized(metadata.get("iconv2"));
+    if (!iconv2.isEmpty()) return iconv2;
+    final int targetPixels = 168;
+    Map<Integer, String> sized = new java.util.TreeMap<>();
+    Object icons = metadata.get("icons");
+    Map<String, Object> allVariants = new java.util.LinkedHashMap<>(map(icons));
+    for (Map.Entry<String, Object> entry : metadata.entrySet()) if (entry.getKey().startsWith("icons-")) allVariants.putIfAbsent(entry.getKey().substring(6), entry.getValue());
+    for (Map.Entry<String, Object> entry : allVariants.entrySet()) {
+      try {
+        int pixels = Integer.parseInt(entry.getKey().replaceAll("[^0-9]", ""));
+        String path = localized(entry.getValue());
+        if (pixels > 0 && !path.isEmpty()) sized.put(pixels, path);
+      } catch (NumberFormatException ignored) { }
+    }
+    for (Map.Entry<Integer, String> entry : sized.entrySet()) if (entry.getKey() >= targetPixels) return entry.getValue();
+    if (!sized.isEmpty()) return ((java.util.TreeMap<Integer, String>) sized).lastEntry().getValue();
+    return localized(metadata.get("icon"));
   }
   private static String fallback(String value, String other) { return value.isEmpty() ? other : value; }
   private static Map<String, Object> map(Object value) { return value instanceof Map ? cast(value) : Collections.emptyMap(); }
