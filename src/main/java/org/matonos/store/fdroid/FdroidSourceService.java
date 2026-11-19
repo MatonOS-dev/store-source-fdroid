@@ -44,7 +44,7 @@ public final class FdroidSourceService extends Service {
   private final ISoftwareSource.Stub binder = new ISoftwareSource.Stub() {
     @Override public SourceInfo info() {
       SourceInfo info = new SourceInfo(); info.version = ISoftwareSource.VERSION; info.revision = ISoftwareSource.REVISION;
-      info.name = "fdroid"; info.label = "Android apps"; info.description = "Android applications from signed software repositories."; info.addRepoFields = new String[]{"fingerprint:Signing fingerprint (SHA-256)"};
+      info.name = "fdroid"; info.label = "F-Droid"; info.description = "Android applications from signed software repositories."; info.addRepoFields = new String[]{"fingerprint:Signing fingerprint (SHA-256)"};
       info.capabilities = ISoftwareSource.CAP_REPOSITORIES | ISoftwareSource.CAP_ANTI_FEATURES | ISoftwareSource.CAP_PERMISSIONS;
       return info;
     }
@@ -56,7 +56,12 @@ public final class FdroidSourceService extends Service {
       return call("collection kind=" + kind, () -> listingArray(FdroidCatalog.page(listings(queryCatalogue("new", "", offset)), offset, limit)));
     }
     @Override public AppDetails details(String id, String repo) {
-      return call("details id=" + id + " repo=" + repo, () -> detailsObject(find(id, repo)));
+      return call("details id=" + id + " repo=" + repo, () -> {
+        Map<String,Object> app=find(id,repo);
+        try { for(Map<String,Object> candidate:queryCatalogue("search","",0)) if(id.equals(candidate.get("id"))&&candidate.get("repoOptions") instanceof List){app.put("repoOptions",candidate.get("repoOptions"));break;} }
+        catch(Exception error){Log.w(TAG,"Repository choices unavailable for app="+id+"; showing selected repository only",error);}
+        return detailsObject(app);
+      });
     }
     @Override public Review[] reviews(String id, int offset, int limit) { throw new UnsupportedOperationException("F-Droid reviews are not supported"); }
     @Override public AppListing[] installed(int offset, int limit) {
@@ -122,7 +127,7 @@ public final class FdroidSourceService extends Service {
     List<Map<String, Object>> result = new ArrayList<>();
     for (Map<String, Object> app : apps) {
       Map<String, Object> row = new LinkedHashMap<>();
-      for (String key : new String[]{"id", "packageName", "name", "summary", "icon", "developer", "installed", "versionName", "repo", "added", "antiFeatures"}) if (app.containsKey(key)) row.put(key, app.get(key));
+      for (String key : new String[]{"id", "packageName", "name", "summary", "icon", "developer", "installed", "versionName", "repo", "added", "antiFeatures", "repoOptions"}) if (app.containsKey(key)) row.put(key, app.get(key));
       result.add(row);
     }
     return result;
@@ -136,6 +141,7 @@ public final class FdroidSourceService extends Service {
       item.installed = Boolean.TRUE.equals(row.get("installed")); item.repo = text(row.get("repo"));
       item.versionName = nullable(row.get("versionName")); item.packageName = nullable(row.get("packageName")); item.badges = badges(row); result[i] = item;
       item.added = Math.max(0, number(row.get("added")));
+      Object rawOptions=row.get("repoOptions");if(rawOptions instanceof List){List<?> values=(List<?>)rawOptions;item.repoOptions=new RepoOption[values.size()];for(int j=0;j<values.size();j++){if(!(values.get(j) instanceof Map))continue;Map<?,?> value=(Map<?,?>)values.get(j);RepoOption option=new RepoOption();option.repoId=text(value.get("repoId"));option.name=text(value.get("name"));option.version=nullable(value.get("version"));option.installable=!Boolean.FALSE.equals(value.get("installable"));option.note=nullable(value.get("note"));item.repoOptions[j]=option;}}
     }
     return result;
   }
@@ -187,7 +193,7 @@ public final class FdroidSourceService extends Service {
   }
   private List<Map<String, Object>> catalogue(String mode, String term) throws Exception {
     List<Map<String, Object>> result = new ArrayList<>();
-    List<Map<String, Object>> installed = mode.equals("search") ? Collections.emptyList() : installedVersions();
+    List<Map<String, Object>> installed = installedVersions();
     List<String> names = new ArrayList<>(); for (Map<String, Object> p : installed) names.add(text(p.get("packageName")));
     List<Map<String,Object>> enabled=new ArrayList<>();
     for (Map<String,Object> repository : repositories.list()) if (Boolean.TRUE.equals(repository.get("enabled"))) enabled.add(repository);
@@ -202,6 +208,8 @@ public final class FdroidSourceService extends Service {
       } catch(Exception error) { Throwable cause=error instanceof java.util.concurrent.ExecutionException ? error.getCause() : error; Exception failure=cause instanceof Exception?(Exception)cause:new Exception(cause); Log.e(TAG,mode+" repository="+url+" failed",failure); repositories.setBroken(url,true); last=failure; }
     }
     if("new".equals(mode)) result=FdroidCatalog.recentlyAdded(result);
+    attachRepoOptions(result);
+    if("installed".equals(mode)) result.removeIf(app -> !Boolean.TRUE.equals(app.get("candidateInstallable")));
     if(succeeded==0 && last!=null) throw last; return result;
   }
   private List<Map<String,Object>> queryRepository(Map<String,Object> repo,String mode,String term,List<Map<String,Object>> installed,List<String> names) throws Exception {
@@ -212,12 +220,26 @@ public final class FdroidSourceService extends Service {
       else apps=client.search(getFilesDir(),url,fingerprint,term);
       List<Map<String,Object>> accepted=new ArrayList<>();
       for(Map<String,Object> app:FdroidCatalog.candidates(apps,url)) {
-        if(mode.equals("installed")){Map<String,Object> current=null;for(Map<String,Object> p:installed)if(p.get("packageName").equals(app.get("id")))current=p;
-          if(current==null||!current.get("signerSha256").equals(app.get("signerSha256")))continue;}
+        Map<String,Object> current=null;for(Map<String,Object> p:installed)if(p.get("packageName").equals(app.get("id")))current=p;
+        app.put("candidateInstallable",current==null||current.get("signerSha256").equals(app.get("signerSha256")));
+        app.put("installed",current!=null);
+        if(mode.equals("installed")&&current==null)continue;
         accepted.add(app);
       }
       return accepted;
   }
+  private void attachRepoOptions(List<Map<String,Object>> rows) {
+    Map<String,List<Map<String,Object>>> candidates=new LinkedHashMap<>();
+    for(Map<String,Object> row:rows)candidates.computeIfAbsent(text(row.get("id")),key->new ArrayList<>()).add(row);
+    Map<String,Map<String,Object>> repositoryById=new HashMap<>();for(Map<String,Object> repository:repositories.list())repositoryById.put(text(repository.get("url")),repository);
+    for(Map<String,Object> row:rows){List<Map<String,Object>> offers=candidates.get(text(row.get("id")));List<Map<String,Object>> options=new ArrayList<>();Set<String> seen=new HashSet<>();
+      for(Map<String,Object> offer:offers){String repo=text(offer.get("repo"));if(!seen.add(repo))continue;Map<String,Object> repository=repositoryById.get(repo);Map<String,Object> option=new LinkedHashMap<>();option.put("repoId",repo);option.put("name",repository==null?repo:text(repository.get("label")));
+        boolean installable=!Boolean.FALSE.equals(offer.get("candidateInstallable"));option.put("installable",installable);if(!installable)option.put("note","Different signing key");options.add(option);}
+      if(Boolean.TRUE.equals(row.get("installed"))){String origin=getSharedPreferences("fdroid-install-origin",MODE_PRIVATE).getString(text(row.get("id")),null);if(origin!=null){row.put("repo",origin);if(seen.add(origin)){Map<String,Object> repository=repositoryById.get(origin);Map<String,Object> option=new LinkedHashMap<>();option.put("repoId",origin);option.put("name",repository==null?origin:text(repository.get("label")));option.put("installable",false);option.put("note","Installed repository is unavailable");options.add(option);}}}
+      row.put("repoOptions",options);
+    }
+  }
+
   private List<Map<String,Object>> queryCatalogue(String mode,String term,int offset) throws Exception {
     return FdroidCatalog.cachedQueryPage(queryResults,mode,term,offset,()->catalogue(mode,term));
   }
@@ -246,7 +268,7 @@ public final class FdroidSourceService extends Service {
       ensureActive(task); if(!names.contains("base.apk"))throw new IllegalArgumentException("F-Droid package has no base APK"); task.callback.progress(task.op,"Verified APKs",100,0,0);
       task.callback.commit(task.op,task.id,names.toArray(new String[0]),descriptors.toArray(new ParcelFileDescriptor[0]),new String[0],new ICommitResult.Stub(){@Override public void result(boolean ok,String error){
         if(!task.terminal.compareAndSet(false,true)){Log.e(TAG,"Duplicate commit result op="+task.op);return;}
-        try{if(task.cancelled.get())task.callback.failed(task.op,"cancelled");else if(ok)task.callback.done(task.op);else{Log.e(TAG,"Commit failed op="+task.op+" package="+task.id+": "+error);task.callback.failed(task.op,error);}}catch(RemoteException gone){Log.e(TAG,"Delivering terminal result op="+task.op+" failed",gone);}finally{operations.finish(task.op);installs.remove(task.op,task);}
+        try{if(task.cancelled.get())task.callback.failed(task.op,"cancelled");else if(ok){getSharedPreferences("fdroid-install-origin",MODE_PRIVATE).edit().putString(task.id,task.repo).apply();task.callback.done(task.op);}else{Log.e(TAG,"Commit failed op="+task.op+" package="+task.id+": "+error);task.callback.failed(task.op,error);}}catch(RemoteException gone){Log.e(TAG,"Delivering terminal result op="+task.op+" failed",gone);}finally{operations.finish(task.op);installs.remove(task.op,task);}
       }});
     } catch(Exception error) {
       String message=task.cancelled.get()?"cancelled":text(error.getMessage()); if(!task.cancelled.get())Log.e(TAG,"Install op="+task.op+" package="+task.id+" failed",error);
