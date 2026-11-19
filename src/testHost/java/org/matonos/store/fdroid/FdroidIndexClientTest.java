@@ -72,8 +72,8 @@ public final class FdroidIndexClientTest {
   }
 
   private static void testMarkdownConversion() {
-    String converted=FdroidMarkdown.convert("<p>Thunderbird <strong>mail</strong></p><p>Privacy &amp; security</p><ul><li>Open source</li><li><a href=\"https://example.org\">Website</a></li></ul>");
-    check(converted.contains("Thunderbird **mail**")&&converted.contains("\n\nPrivacy & security")&&converted.contains("- Open source")&&converted.contains("[Website](https://example.org)"),"F-Droid HTML description converts to CommonMark");
+    String converted=FdroidMarkdown.convert("<p>Thunderbird <strong>mail</strong></p><p>What you can do</p><ul><li>Use one app with an optional Unified Inbox.</li><li><a href=\"https://thunderbird.net\">Visit Thunderbird</a></li></ul>");
+    check(converted.contains("Thunderbird **mail**")&&converted.contains("What you can do")&&converted.contains("optional Unified Inbox")&&converted.contains("[Visit Thunderbird](https://thunderbird.net)"),"F-Droid Thunderbird HTML description converts to CommonMark");
   }
   private static void testSearchRanking() {
     java.util.Map<String,Object> bendy = new java.util.LinkedHashMap<>();
