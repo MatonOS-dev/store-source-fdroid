@@ -45,10 +45,11 @@ public final class FdroidRepositories {
     }
     return result;
   }
+  private boolean builtIn(String url) { return OFFICIAL_URL.equals(url) || Arrays.stream(PRESETS).anyMatch(preset -> preset[0].equals(url)); }
   private Map<String, Object> repo(String url, String fingerprint, boolean official) {
     Map<String, Object> r = new LinkedHashMap<>();
     r.put("id", url); r.put("url", url); r.put("label", official ? "F-Droid (built in)" : labels().getOrDefault(url, FdroidRepository.displayHost(url)));
-    r.put("fingerprint", fingerprint); r.put("official", official); r.put("broken", values("broken").contains(url));
+    r.put("fingerprint", fingerprint); r.put("official", official); r.put("builtIn", builtIn(url)); r.put("broken", values("broken").contains(url));
     r.put("enabled", !values("disabled").contains(url)); r.put("appCount", prefs.getInt("app-count:" + url, -1));
     r.put("lastRefreshed", prefs.getLong("last-refreshed:" + url, 0)); return r;
   }
@@ -84,7 +85,7 @@ public final class FdroidRepositories {
   }
   public synchronized void remove(String id) {
     list(); String url = FdroidRepository.normalizeUrl(id);
-    if (OFFICIAL_URL.equals(url)) throw new IllegalArgumentException("The built-in F-Droid repository cannot be removed");
+    if (builtIn(url)) throw new IllegalArgumentException("Built-in F-Droid repository cannot be removed");
     Set<String> trusted = values("trusted"); trusted.removeIf(v -> v.startsWith(url + "\t"));
     Set<String> broken = values("broken"); broken.remove(url);
     Set<String> labels = values("labels"); labels.removeIf(v -> v.startsWith(url + "\t"));

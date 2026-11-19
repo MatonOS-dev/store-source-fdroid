@@ -60,8 +60,8 @@ public final class FdroidSourceService extends Service {
   private final ISoftwareSource.Stub binder = new ISoftwareSource.Stub() {
     @Override public SourceInfo info() {
       SourceInfo info = new SourceInfo(); info.version = ISoftwareSource.VERSION; info.revision = ISoftwareSource.REVISION;
-      info.name = "fdroid"; info.label = "F-Droid"; info.description = "Android applications from signed software repositories."; info.addRepoFields = new String[]{"fingerprint:Signing fingerprint (SHA-256)"};
-      info.capabilities = ISoftwareSource.CAP_REPOSITORIES | ISoftwareSource.CAP_ANTI_FEATURES | ISoftwareSource.CAP_PERMISSIONS;
+      info.name = "fdroid"; info.label = "F-Droid"; info.description = "Applications from signed software repositories.";
+      info.capabilities = ISoftwareSource.CAP_ANTI_FEATURES | ISoftwareSource.CAP_PERMISSIONS;
       return info;
     }
     @Override public AppListing[] search(String term, int offset, int limit) {
@@ -86,20 +86,64 @@ public final class FdroidSourceService extends Service {
     @Override public AppListing[] updates(int offset, int limit) {
       return call("updates", () -> listingArray(FdroidCatalog.page(listings(queryCatalogue("updates", "", offset)), offset, limit)));
     }
-    @Override public Repo[] repos(int offset, int limit) {
-      return call("repos", () -> repoArray(FdroidCatalog.page(repositories.list(), offset, limit)));
+    @Override public SourceSetting[] settings() {
+      return call("settings", () -> {
+        List<SourceSetting> rows = new ArrayList<>();
+        SourceSetting stats = new SourceSetting(); stats.id = "share_stats"; stats.label = "Share anonymous download statistics"; stats.type = "boolean";
+        stats.value = getSharedPreferences("fdroid-settings", MODE_PRIVATE).getBoolean("share_stats", true) ? "true" : "false"; rows.add(stats);
+        SourceSetting add = new SourceSetting(); add.id = "add_repository"; add.label = "Add repository"; add.type = "action";
+        SourceSetting url = new SourceSetting(); url.id = "url"; url.label = "Repository URL"; url.type = "text";
+        SourceSetting name = new SourceSetting(); name.id = "name"; name.label = "Name"; name.type = "text";
+        SourceSetting fingerprint = new SourceSetting(); fingerprint.id = "fingerprint"; fingerprint.label = "Signing fingerprint (SHA-256)"; fingerprint.type = "text";
+        add.fields = new SourceSetting[]{url, name, fingerprint}; rows.add(add);
+        for (Map<String,Object> repo : repositories.list()) {
+          SourceSetting group = new SourceSetting(); group.id = "repository:" + repo.get("id"); group.label = text(repo.get("label")); group.type = "group";
+          group.removable = !Boolean.TRUE.equals(repo.get("builtIn"));
+          SourceSetting enabled = new SourceSetting(); enabled.id = "repo-enabled:" + repo.get("id"); enabled.label = "Enabled"; enabled.type = "boolean"; enabled.value = String.valueOf(repo.get("enabled"));
+          SourceSetting repoUrl = settingLine("url", "URL", text(repo.get("url")));
+          SourceSetting count = settingLine("apps", "App count", ((Number)repo.get("appCount")).intValue() < 0 ? "Unknown" : String.valueOf(repo.get("appCount")));
+          long refreshed = ((Number)repo.get("lastRefreshed")).longValue();
+          SourceSetting last = settingLine("refreshed", "Last refreshed", refreshed == 0 ? "Never" : java.text.DateFormat.getDateTimeInstance().format(new java.util.Date(refreshed * 1000L)));
+          group.children = new SourceSetting[]{enabled, repoUrl, count, last}; rows.add(group);
+        }
+        return rows.toArray(new SourceSetting[0]);
+      });
     }
-    @Override public void addRepo(String url) { addRepoInternal("", url); }
-    @Override public void addRepoNamed(String name, String url) { addRepoInternal(name, url); }
-    private void addRepoInternal(String name, String url) { call("addRepo", () -> {
-      String repo = repositories.add(url, name);
-      for (Map<String, Object> r : repositories.list()) if (repo.equals(r.get("url"))) {
-        try { client.search(getFilesDir(), repo, text(r.get("fingerprint")), ""); repositories.setBroken(repo, false); }
-        catch (Exception error) { Log.e(TAG, "Verifying added repository " + repo + " failed", error); throw error; }
+    private SourceSetting settingLine(String id, String label, String value) {
+      SourceSetting line = new SourceSetting(); line.id = id; line.label = label; line.type = "text"; line.value = value; line.readOnly = true; return line;
+    }
+    @Override public String setSetting(String id, String value) {
+      if ("share_stats".equals(id)) {
+        if (!"true".equals(value) && !"false".equals(value)) return "Expected a boolean value";
+        if (!getSharedPreferences("fdroid-settings", MODE_PRIVATE).edit().putBoolean("share_stats", Boolean.parseBoolean(value)).commit()) return "Could not save setting";
+        return null;
       }
-      return null;
-    }); }
-    @Override public void delRepo(String id) { call("delRepo", () -> { repositories.remove(id); return null; }); }
+      if (id != null && id.startsWith("repo-enabled:")) {
+        try { repositories.setEnabled(id.substring("repo-enabled:".length()), Boolean.parseBoolean(value)); synchronized (queryResults) { queryResults.clear(); } return null; }
+        catch (Exception error) { return error.getMessage(); }
+      }
+      if (id != null && id.startsWith("repository:") && value == null) {
+        try { repositories.remove(id.substring("repository:".length())); return null; }
+        catch (Exception error) { return error.getMessage(); }
+      }
+      return "Unknown or read-only setting";
+    }
+    @Override public ActionResult runAction(String id, String[] values, boolean confirmed) {
+      if (!"add_repository".equals(id)) { ActionResult result = new ActionResult(); result.error = "Unknown action"; return result; }
+      String url = values != null && values.length > 0 ? values[0].trim() : "";
+      String name = values != null && values.length > 1 ? values[1].trim() : "";
+      String fingerprint = values != null && values.length > 2 ? values[2].trim() : "";
+      if (url.isEmpty() || fingerprint.isEmpty()) { ActionResult result = new ActionResult(); result.error = "URL and signing fingerprint are required"; return result; }
+      try { fingerprint = FdroidRepository.normalizeFingerprint(fingerprint); }
+      catch (Exception error) { ActionResult result = new ActionResult(); result.error = error.getMessage(); return result; }
+      if (!confirmed) { ActionResult result = new ActionResult(); result.confirmTitle = "Trust repository signer?"; result.confirmMessage = "Add " + url + " using signing fingerprint " + fingerprint + "? Only trust a signer you verified."; return result; }
+      try {
+        String repo = repositories.add(android.net.Uri.parse(url).buildUpon().appendQueryParameter("fingerprint", fingerprint).build().toString(), name);
+        client.search(getFilesDir(), repo, fingerprint, ""); repositories.setBroken(repo, false);
+        synchronized (queryResults) { queryResults.clear(); }
+        return new ActionResult();
+      } catch (Exception error) { ActionResult result = new ActionResult(); result.error = error.getMessage(); return result; }
+    }
     @Override public void install(String id, String repo, String op, IInstallCallback callback) {
       if (id == null || id.isEmpty()) throw new IllegalArgumentException("Package id required");
       if (repo == null || repo.isEmpty()) throw new IllegalArgumentException("Repository id required");
@@ -131,11 +175,7 @@ public final class FdroidSourceService extends Service {
         return result.toArray(new PopularApp[0]);
       });
     }
-    @Override public void setRepoEnabled(String id, boolean enabled) {
-      call("setRepoEnabled id=" + id + " enabled=" + enabled, () -> {
-        repositories.setEnabled(id, enabled); synchronized (queryResults) { queryResults.clear(); } return "";
-      });
-    }
+
   };
   @Override public IBinder onBind(Intent intent) { return binder; }
 
@@ -159,13 +199,6 @@ public final class FdroidSourceService extends Service {
       item.added = Math.max(0, number(row.get("added")));
       Object rawOptions=row.get("repoOptions");if(rawOptions instanceof List){List<?> values=(List<?>)rawOptions;item.repoOptions=new RepoOption[values.size()];for(int j=0;j<values.size();j++){if(!(values.get(j) instanceof Map))continue;Map<?,?> value=(Map<?,?>)values.get(j);RepoOption option=new RepoOption();option.repoId=text(value.get("repoId"));option.name=text(value.get("name"));option.version=nullable(value.get("version"));option.installable=!Boolean.FALSE.equals(value.get("installable"));option.note=nullable(value.get("note"));item.repoOptions[j]=option;}}
     }
-    return result;
-  }
-  private Repo[] repoArray(List<Map<String, Object>> rows) {
-    Repo[] result = new Repo[rows.size()];
-    for (int i = 0; i < rows.size(); i++) { Map<String, Object> row = rows.get(i); Repo item = new Repo();
-      item.id = text(row.get("id")); item.url = text(row.get("url")); item.label = text(row.get("label"));
-      item.official = Boolean.TRUE.equals(row.get("official")); item.broken = Boolean.TRUE.equals(row.get("broken")); item.builtIn=item.official; item.removable=!item.official; item.description=nullable(row.get("description")); result[i] = item; }
     return result;
   }
   private AppDetails detailsObject(Map<String, Object> app) {
