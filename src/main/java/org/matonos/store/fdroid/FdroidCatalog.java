@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.ConcurrentMap;
 
 /** Pure catalogue operations shared by the Binder adapter and host tests. */
 final class FdroidCatalog {
@@ -99,4 +100,9 @@ final class FdroidCatalog {
   }
 
   interface CheckedSupplier<T> { T get() throws Exception; }
+
+  static <T> T withKeyLock(ConcurrentMap<String, Object> locks, String key, CheckedSupplier<T> action) throws Exception {
+    Object lock = locks.computeIfAbsent(key, ignored -> new Object());
+    synchronized (lock) { return action.get(); }
+  }
 }

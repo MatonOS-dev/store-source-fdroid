@@ -66,6 +66,7 @@ public final class FdroidIndexClientTest {
     testManifest(signedJar.getParentFile());
     testTypedCatalogContract();
     testParallelRepoOrderAndPageCache();
+    testIndependentQueryLocksOverlap();
     testHttpCatalogueCache(signedJar, certFile, new File(args[2]), new File(args[3]), new File(args[4]));
     testOperationTable();
     System.out.println("PASS: signed JAR, signer pin, index hash, index parser, APK hash before commit, update signer/version checks, repository trust/removal");
@@ -224,6 +225,27 @@ public final class FdroidIndexClientTest {
     java.util.List<String> secondPage = FdroidCatalog.page(FdroidCatalog.cachedQueryPage(cache, "search", "term", 2, refresh), 2, 2);
     check(firstPage.equals(java.util.List.of("a", "b")) && secondPage.equals(java.util.List.of("c")), "page two slices the cached query result");
     check(refreshes.get() == 1, "page two does not refresh catalogue query");
+  }
+
+  private static void testIndependentQueryLocksOverlap() throws Exception {
+    java.util.concurrent.ConcurrentMap<String,Object> locks = new java.util.concurrent.ConcurrentHashMap<>();
+    java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(2);
+    java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+    try {
+      java.util.concurrent.Future<String> search = pool.submit(() -> FdroidCatalog.withKeyLock(locks, "search\nterm", () -> {
+        entered.countDown();
+        if (!entered.await(2, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("search waited behind another query key");
+        return "search";
+      }));
+      java.util.concurrent.Future<String> updates = pool.submit(() -> FdroidCatalog.withKeyLock(locks, "updates\n", () -> {
+        entered.countDown();
+        if (!entered.await(2, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("updates waited behind another query key");
+        return "updates";
+      }));
+      check("search".equals(search.get(3, java.util.concurrent.TimeUnit.SECONDS))
+          && "updates".equals(updates.get(3, java.util.concurrent.TimeUnit.SECONDS)),
+          "independent query keys overlap their cache fills");
+    } finally { pool.shutdownNow(); }
   }
 
   private static void testTypedCatalogContract() throws Exception {

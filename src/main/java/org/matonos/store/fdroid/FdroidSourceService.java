@@ -1,6 +1,7 @@
 package org.matonos.store.fdroid;
 
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Intent;
 import android.content.pm.*;
 import android.os.*;
@@ -14,6 +15,7 @@ import java.net.*;
 import java.security.MessageDigest;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -28,13 +30,25 @@ public final class FdroidSourceService extends Service {
   private volatile Map<String, Map<String, Object>> serverStats = Collections.emptyMap();
   private volatile long statsFetchedAt;
   private final AtomicBoolean statsRefresh = new AtomicBoolean();
+  private BroadcastReceiver packageReceiver;
   private final Map<String, InstallTask> installs = new ConcurrentHashMap<>();
   private final OperationTable operations = new OperationTable();
   private final Map<String, List<Map<String,Object>>> queryResults = new ConcurrentHashMap<>();
+  private final ConcurrentMap<String, Object> queryLocks = new ConcurrentHashMap<>();
+  private final Map<String, Long> queryTimes = new ConcurrentHashMap<>();
+  private static final long QUERY_CACHE_MILLIS = 60_000L;
+  private final java.util.concurrent.atomic.AtomicLong queryGeneration = new java.util.concurrent.atomic.AtomicLong();
   private final ExecutorService repoQueries = Executors.newCachedThreadPool();
 
   @Override public void onCreate() {
     super.onCreate(); repositories = new FdroidRepositories(this);
+    packageReceiver = new BroadcastReceiver() {
+      @Override public void onReceive(android.content.Context context, Intent intent) { invalidateQueries(); }
+    };
+    android.content.IntentFilter packageFilter = new android.content.IntentFilter();
+    packageFilter.addAction(Intent.ACTION_PACKAGE_ADDED); packageFilter.addAction(Intent.ACTION_PACKAGE_REMOVED); packageFilter.addAction(Intent.ACTION_PACKAGE_REPLACED);
+    packageFilter.addDataScheme("package");
+    registerReceiver(packageReceiver, packageFilter, android.content.Context.RECEIVER_NOT_EXPORTED);
     Set<String> features = new HashSet<>();
     for (FeatureInfo f : getPackageManager().getSystemAvailableFeatures()) if (f.name != null) features.add(f.name);
     client = new FdroidIndexClient(37, Arrays.asList(Build.SUPPORTED_ABIS), features);
@@ -44,6 +58,12 @@ public final class FdroidSourceService extends Service {
       if (raw != null) serverStats = parseStats(new JSONObject(raw));
     } catch (Exception error) { Log.w(TAG, "Reading cached F-Droid stats failed", error); }
     refreshStats(false);
+  }
+
+  @Override public void onDestroy() {
+    if (packageReceiver != null) unregisterReceiver(packageReceiver);
+    repoQueries.shutdownNow();
+    super.onDestroy();
   }
 
   private interface Call<T> { T run() throws Exception; }
@@ -115,11 +135,11 @@ public final class FdroidSourceService extends Service {
         return null;
       }
       if (id != null && id.startsWith("repo-enabled:")) {
-        try { repositories.setEnabled(id.substring("repo-enabled:".length()), Boolean.parseBoolean(value)); synchronized (queryResults) { queryResults.clear(); } return null; }
+        try { repositories.setEnabled(id.substring("repo-enabled:".length()), Boolean.parseBoolean(value)); invalidateQueries(); return null; }
         catch (Exception error) { return error.getMessage(); }
       }
       if (id != null && id.startsWith("repository:") && value == null) {
-        try { repositories.remove(id.substring("repository:".length())); synchronized (queryResults) { queryResults.clear(); } return null; }
+        try { repositories.remove(id.substring("repository:".length())); invalidateQueries(); return null; }
         catch (Exception error) { return error.getMessage(); }
       }
       return "Unknown or read-only setting";
@@ -136,7 +156,7 @@ public final class FdroidSourceService extends Service {
       try {
         String repo = repositories.add(android.net.Uri.parse(url).buildUpon().appendQueryParameter("fingerprint", fingerprint).build().toString(), name);
         client.search(getFilesDir(), repo, fingerprint, ""); repositories.setBroken(repo, false);
-        synchronized (queryResults) { queryResults.clear(); }
+        invalidateQueries();
         return new ActionResult();
       } catch (Exception error) { ActionResult result = new ActionResult(); result.error = error.getMessage(); return result; }
     }
@@ -289,8 +309,34 @@ public final class FdroidSourceService extends Service {
     }
   }
 
+  private void invalidateQueries() {
+    synchronized (queryResults) {
+      queryGeneration.incrementAndGet();
+      queryResults.clear();
+      queryTimes.clear();
+    }
+  }
   private List<Map<String,Object>> queryCatalogue(String mode,String term,int offset) throws Exception {
-    return FdroidCatalog.cachedQueryPage(queryResults,mode,term,offset,()->catalogue(mode,term));
+    String key=mode+"\n"+(term==null?"":term);
+    List<Map<String,Object>> cached=queryResults.get(key);
+    if(freshQuery(key,cached))return cached;
+    return FdroidCatalog.withKeyLock(queryLocks,key,()->{
+      List<Map<String,Object>> lockedCache=queryResults.get(key);
+      if(freshQuery(key,lockedCache))return lockedCache;
+      long generation=queryGeneration.get();
+      List<Map<String,Object>> result=catalogue(mode,term);
+      synchronized (queryResults) {
+        if(queryGeneration.get()==generation) {
+          queryResults.put(key,result);
+          queryTimes.put(key,System.currentTimeMillis());
+        }
+      }
+      return result;
+    });
+  }
+  private boolean freshQuery(String key,List<Map<String,Object>> cached) {
+    Long fetched=queryTimes.get(key);
+    return cached!=null&&fetched!=null&&System.currentTimeMillis()-fetched<QUERY_CACHE_MILLIS;
   }
   private Map<String,Object> find(String id, String repoId) throws Exception {
     try { Map<String,Object> repo=FdroidCatalog.repository(repositories.list(),repoId);
@@ -325,6 +371,7 @@ public final class FdroidSourceService extends Service {
     } finally {
       for(ParcelFileDescriptor fd:descriptors){Log.i(TAG,"close fd="+fd.getFd()+" at FdroidSourceService.prepare");try{fd.close();}catch(IOException error){Log.e(TAG,"Closing APK descriptor op="+task.op,error);}}
       if(cache!=null){File[] entries=cache.listFiles();if(entries==null)Log.e(TAG,"Cannot list install cache "+cache);else for(File file:entries)if(!file.delete())Log.e(TAG,"Cannot delete "+file);if(!cache.delete())Log.e(TAG,"Cannot delete "+cache);}
+      invalidateQueries();
       if(task.terminal.get())installs.remove(task.op,task);
     }
   }
