@@ -28,7 +28,7 @@ final class FdroidCatalog {
     return result;
   }
 
-  /** Rank from server download counts (log scale) and community ratings. */
+  /** Rank from server download counts (log scale), with an anti-feature penalty. */
   static List<Map<String,Object>> popular(List<Map<String,Object>> apps, int limit, Map<String,Map<String,Object>> serverStats) {
     if (limit <= 0) throw new IllegalArgumentException("limit must be positive");
     List<Map<String,Object>> rows = new ArrayList<>();
@@ -38,16 +38,10 @@ final class FdroidCatalog {
       Map<String,Object> stats = serverStats.get(id);
       if (stats == null) stats = java.util.Collections.emptyMap();
       double downloads = Math.min(6.0, Math.log1p(Math.max(0, number(stats.get("downloads")))) * 0.75);
-      double ratingCount = Math.max(0, number(stats.get("ratingCount")));
-      double average = Math.max(0, Math.min(5, stats.get("ratingAvg") instanceof Number ? ((Number)stats.get("ratingAvg")).doubleValue() : 0));
-      Object[] histogram = stats.get("ratingHistogram") instanceof Object[] ? (Object[])stats.get("ratingHistogram") : new Object[]{0,0,0,0,0};
-      double ratingScore = ratingCount == 0 ? 0 : Math.min(3.0, (average / 5.0) * (1.0 + Math.log1p(ratingCount) / 5.0));
       Object anti = app.get("antiFeatures");
       int antiCount = anti instanceof List ? ((List<?>)anti).size() : 0;
       double penalty = Math.min(2.0, antiCount * 0.75);
-      double score = Math.round(Math.max(0, Math.min(10, downloads + ratingScore - penalty)) * 10.0) / 10.0;
-      row.put("serverRating", average); row.put("serverRatingCount", (int)ratingCount);
-      row.put("serverRatingHistogram", histogram);
+      double score = Math.round(Math.max(0, Math.min(10, downloads * (10.0 / 6.0) - penalty)) * 10.0) / 10.0;
       row.put("popularityScore", score); rows.add(row);
     }
     rows.sort((a,b) -> { int score = Double.compare(((Number)b.get("popularityScore")).doubleValue(), ((Number)a.get("popularityScore")).doubleValue()); return score != 0 ? score : text(a.get("id")).compareToIgnoreCase(text(b.get("id"))); });

@@ -40,11 +40,4 @@ No image build, QEMU boot or device installation is authorized for this task. En
 6. Uninstall through the store and confirm the generic receiver completes the operation. Test an offline install and denied/cancelled package confirmation: one failure result, no stale busy indicator. Verify the plugin itself has no install/delete privilege.
 
 The `new` collection orders compatible entries by their index `added`
-timestamp, newest first. Popular uses server download counts on a logarithmic
-scale (up to 6 points) plus server ratings (up to 3 points); anti-features
-subtract up to 2 points. A new server or app with no stats gets score zero.
-Stats refresh in the background about once per day and persist in the plugin's
-private cache. Successful store commits are reported when `share_stats` is on.
-The source contract currently has no user rating submission method, so this
-plugin displays the server rating summary but cannot submit ratings from store
-UI. The API is `https://maton.hanro50.net.za/api/fdroid`.
+timestamp, newest first. Popular uses server download counts on a logarithmic scale (up to 10 points); anti-features subtract up to 2 points. A new server or app with no stats gets score zero. Stats refresh in the background about once per day and persist in the plugin's private cache. Successful store commits are reported when `share_stats` is on. Ratings are submitted and displayed by the store's generic ratings service; this plugin does not read or emit ratings. The downloads API is `https://maton.hanro50.net.za/api/fdroid`.

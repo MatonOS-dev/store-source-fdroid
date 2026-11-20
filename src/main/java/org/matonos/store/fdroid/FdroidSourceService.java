@@ -201,8 +201,6 @@ public final class FdroidSourceService extends Service {
     for (Map<String, Object> app : apps) {
       Map<String, Object> row = new LinkedHashMap<>();
       for (String key : new String[]{"id", "packageName", "name", "summary", "icon", "developer", "installed", "versionName", "repo", "added", "lastUpdated", "versionCount", "antiFeatures", "repoOptions"}) if (app.containsKey(key)) row.put(key, app.get(key));
-      Map<String,Object> stats=serverStats.get(text(app.get("id")).toLowerCase(Locale.ROOT));
-      if(stats!=null){row.put("serverRating",stats.get("ratingAvg"));row.put("serverRatingCount",stats.get("ratingCount"));row.put("serverRatingHistogram",stats.get("ratingHistogram"));}
       result.add(row);
     }
     return result;
@@ -216,7 +214,6 @@ public final class FdroidSourceService extends Service {
       item.installed = Boolean.TRUE.equals(row.get("installed")); item.repo = text(row.get("repo"));
       item.versionName = nullable(row.get("versionName")); item.packageName = nullable(row.get("packageName")); item.badges = badges(row); result[i] = item;
       item.added = Math.max(0, number(row.get("added")));
-      if (row.containsKey("serverRating")) { item.rating = new Rating(); item.rating.average = ((Number)row.get("serverRating")).floatValue(); item.rating.count = (int)number(row.get("serverRatingCount")); Object[] values=(Object[])row.get("serverRatingHistogram"); item.rating.histogram=new int[5]; for(int j=0;j<Math.min(5,values.length);j++)item.rating.histogram[j]=((Number)values[j]).intValue(); }
       Object rawOptions=row.get("repoOptions");if(rawOptions instanceof List){List<?> values=(List<?>)rawOptions;item.repoOptions=new RepoOption[values.size()];for(int j=0;j<values.size();j++){if(!(values.get(j) instanceof Map))continue;Map<?,?> value=(Map<?,?>)values.get(j);RepoOption option=new RepoOption();option.repoId=text(value.get("repoId"));option.name=text(value.get("name"));option.version=nullable(value.get("version"));option.installable=!Boolean.FALSE.equals(value.get("installable"));option.note=nullable(value.get("note"));item.repoOptions[j]=option;}}
     }
     return result;
@@ -406,7 +403,7 @@ public final class FdroidSourceService extends Service {
 
   private Map<String, Map<String, Object>> parseStats(JSONObject root) throws Exception {
     Map<String, Map<String, Object>> result = new HashMap<>();
-    java.util.Iterator<String> keys = root.keys(); while (keys.hasNext()) { String key = keys.next(); JSONObject value = root.getJSONObject(key); Map<String, Object> row = new HashMap<>(); row.put("downloads", value.optInt("downloads")); row.put("ratingCount", value.optInt("ratingCount")); row.put("ratingAvg", value.optDouble("ratingAvg")); JSONArray histogram=value.optJSONArray("ratingHistogram"); Object[] bins=new Object[5]; for(int i=0;i<5;i++)bins[i]=histogram==null?0:histogram.optInt(i); row.put("ratingHistogram",bins); result.put(key.toLowerCase(Locale.ROOT), row); }
+    java.util.Iterator<String> keys = root.keys(); while (keys.hasNext()) { String key = keys.next(); JSONObject value = root.getJSONObject(key); Map<String, Object> row = new HashMap<>(); row.put("downloads", value.optInt("downloads")); result.put(key.toLowerCase(Locale.ROOT), row); }
     return result;
   }
 
