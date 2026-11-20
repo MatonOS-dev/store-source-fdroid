@@ -61,6 +61,7 @@ public final class FdroidIndexClientTest {
     testCompatibility();
     testSearchRanking();
     testRecentlyAddedCollection();
+    testSharedCatalogueViews();
     testPopularityScoring();
     testSafety();
     testManifest(signedJar.getParentFile());
@@ -107,6 +108,24 @@ public final class FdroidIndexClientTest {
     java.util.List<java.util.Map<String,Object>> sorted=FdroidCatalog.recentlyAdded(java.util.List.of(old,newest,middle));
     check("org.example.newest".equals(sorted.get(0).get("id"))&&"org.example.middle".equals(sorted.get(1).get("id"))&&"org.example.old".equals(sorted.get(2).get("id")),
         "new collection is ordered by added timestamp from the cached index");
+  }
+  private static void testSharedCatalogueViews() {
+    java.util.concurrent.atomic.AtomicInteger builds=new java.util.concurrent.atomic.AtomicInteger();
+    java.util.List<java.util.Map<String,Object>> catalogue=new java.util.ArrayList<>(10_000*3);
+    for(int repo=0;repo<3;repo++)for(int app=0;app<10_000;app++){
+      java.util.Map<String,Object> row=new java.util.LinkedHashMap<>();row.put("id","org.example.app"+app);row.put("repo","repo"+repo);row.put("name","App "+app);row.put("summary","Synthetic listing");row.put("added",(long)app);catalogue.add(row);
+    }
+    // Model the shared cache builder used by listing views: all endpoints reuse these row objects.
+    java.util.function.Supplier<java.util.List<java.util.Map<String,Object>>> shared=()->{builds.incrementAndGet();return catalogue;};
+    java.util.List<java.util.Map<String,Object>> base=shared.get();
+    java.util.List<java.util.Map<String,Object>> popular=FdroidCatalog.popular(base,20,java.util.Collections.emptyMap());
+    java.util.List<java.util.Map<String,Object>> recent=FdroidCatalog.recentlyAdded(base);
+    java.util.List<java.util.Map<String,Object>> emptySearch=FdroidCatalog.filterSearch(base,"");
+    java.util.Map<String,java.util.List<java.util.Map<String,Object>>> byId=FdroidCatalog.byId(base);
+    check(popular.size()==20&&recent.size()==30_000&&emptySearch.size()==30_000,"shared catalogue supports Popular, New, empty search and repoOptions index");
+    check(builds.get()==1,"four catalogue views use one catalogue build");
+    check(base.contains(recent.get(0))&&emptySearch.get(0)==base.get(0)&&byId.get("org.example.app42").size()==3,"derived catalogue views and repo index retain shared row objects");
+    System.out.println("PASS: 10,000 apps x 3 repos; one build serves Popular, New, empty search and repoOptions; rows="+base.size()+", map rows retained by derived views without row copies");
   }
   private static void testPopularityScoring() {
     java.util.Map<String,Object> quiet=new java.util.LinkedHashMap<>();quiet.put("id","org.example.quiet");

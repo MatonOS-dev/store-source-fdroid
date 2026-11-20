@@ -90,7 +90,7 @@ public final class FdroidSourceService extends Service {
     @Override public AppDetails details(String id, String repo) {
       return call("details id=" + id + " repo=" + repo, () -> {
         Map<String,Object> app=find(id,repo);
-        try { for(Map<String,Object> candidate:queryCatalogue("search","",0)) if(id.equals(candidate.get("id"))&&candidate.get("repoOptions") instanceof List){app.put("repoOptions",candidate.get("repoOptions"));break;} }
+        try { app.put("repoOptions",repoOptionsFor(id)); }
         catch(Exception error){Log.w(TAG,"Repository choices unavailable for app="+id+"; showing selected repository only",error);}
         return detailsObject(app);
       });
@@ -269,11 +269,10 @@ public final class FdroidSourceService extends Service {
     for(int repoIndex=0;repoIndex<enabled.size();repoIndex++) {
       Map<String,Object> repo=enabled.get(repoIndex); String url=text(repo.get("url"));
       try { List<Map<String,Object>> apps=futures.get(repoIndex).get(); repositories.setBroken(url,false);
-        if("new".equals(mode)||("search".equals(mode)&&(term==null||term.isEmpty())))repositories.markRefreshed(url,apps.size());else repositories.markChecked(url);succeeded++;
+        if("search".equals(mode)&&(term==null||term.isEmpty()))repositories.markRefreshed(url,apps.size());else repositories.markChecked(url);succeeded++;
         for(Map<String,Object> app:apps){decorate(app,url); app.put("repo",url); if(mode.equals("installed")||mode.equals("updates"))app.put("installed",true); result.add(app);}
       } catch(Exception error) { Throwable cause=error instanceof java.util.concurrent.ExecutionException ? error.getCause() : error; Exception failure=cause instanceof Exception?(Exception)cause:new Exception(cause); Log.e(TAG,mode+" repository="+url+" failed",failure); repositories.setBroken(url,true); last=failure; }
     }
-    if("new".equals(mode)) result=FdroidCatalog.recentlyAdded(result);
     attachRepoOptions(result);
     if("installed".equals(mode)) result.removeIf(app -> !Boolean.TRUE.equals(app.get("candidateInstallable")));
     if(succeeded==0 && last!=null) throw last; return result;
@@ -314,22 +313,40 @@ public final class FdroidSourceService extends Service {
     }
   }
   private List<Map<String,Object>> queryCatalogue(String mode,String term,int offset) throws Exception {
-    String key=mode+"\n"+(term==null?"":term);
+    String key=(mode.equals("search")||mode.equals("new"))?"catalogue\n":"mode\n"+mode+"\n"+(term==null?"":term);
     List<Map<String,Object>> cached=queryResults.get(key);
-    if(freshQuery(key,cached))return cached;
+    if(freshQuery(key,cached))return queryView(mode,term,cached);
     return FdroidCatalog.withKeyLock(queryLocks,key,()->{
       List<Map<String,Object>> lockedCache=queryResults.get(key);
-      if(freshQuery(key,lockedCache))return lockedCache;
+      if(freshQuery(key,lockedCache))return queryView(mode,term,lockedCache);
       long generation=queryGeneration.get();
-      List<Map<String,Object>> result=catalogue(mode,term);
+      List<Map<String,Object>> result=catalogue(key.startsWith("catalogue")?"search":mode,"");
       synchronized (queryResults) {
         if(queryGeneration.get()==generation) {
           queryResults.put(key,result);
           queryTimes.put(key,System.currentTimeMillis());
         }
       }
-      return result;
+      return queryView(mode,term,result);
     });
+  }
+  private List<Map<String,Object>> queryView(String mode,String term,List<Map<String,Object>> rows) {
+    if(mode.equals("new"))return FdroidCatalog.recentlyAdded(rows);
+    if(mode.equals("search")&&term!=null&&!term.trim().isEmpty())return FdroidCatalog.filterSearch(rows,term);
+    return rows;
+  }
+  private List<Map<String,Object>> repoOptionsFor(String id) throws Exception {
+    List<Map<String,Object>> options=new ArrayList<>(); Set<String> seen=new HashSet<>();
+    List<Map<String,Object>> installed=installedVersions(); Map<String,Object> current=null;
+    for(Map<String,Object> row:installed)if(id.equals(row.get("packageName")))current=row;
+    for(Map<String,Object> repo:repositories.list())if(Boolean.TRUE.equals(repo.get("enabled"))){
+      String url=text(repo.get("url")); Map<String,Object> app=client.details(getFilesDir(),url,text(repo.get("fingerprint")),id);
+      if(app==null)continue; boolean installable=current==null||current.get("signerSha256").equals(app.get("signerSha256"));
+      Map<String,Object> option=new LinkedHashMap<>();option.put("repoId",url);option.put("name",text(repo.get("label")).isEmpty()?url:text(repo.get("label")));option.put("installable",installable);if(!installable)option.put("note","Different signing key");options.add(option);seen.add(url);
+    }
+    String origin=getSharedPreferences("fdroid-install-origin",MODE_PRIVATE).getString(id,null);
+    if(current!=null&&origin!=null&&seen.add(origin)){Map<String,Object> option=new LinkedHashMap<>();option.put("repoId",origin);option.put("name",origin);option.put("installable",false);option.put("note","Installed repository is unavailable");options.add(option);}
+    return options;
   }
   private boolean freshQuery(String key,List<Map<String,Object>> cached) {
     Long fetched=queryTimes.get(key);

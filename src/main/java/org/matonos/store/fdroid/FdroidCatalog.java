@@ -28,12 +28,35 @@ final class FdroidCatalog {
     return result;
   }
 
+  static Map<String,List<Map<String,Object>>> byId(List<Map<String,Object>> apps) {
+    Map<String,List<Map<String,Object>>> result=new LinkedHashMap<>();
+    for(Map<String,Object> app:apps)result.computeIfAbsent(text(app.get("id")),ignored->new ArrayList<>()).add(app);
+    return result;
+  }
+
+  /** Search an already loaded catalogue, preserving the index client's ranking. */
+  static List<Map<String,Object>> filterSearch(List<Map<String,Object>> apps, String term) {
+    String needle=term==null?"":term.trim().toLowerCase(java.util.Locale.ROOT);
+    List<Map<String,Object>> result=new ArrayList<>();
+    for(Map<String,Object> app:apps)if(matchesSearch(app,needle)) result.add(app);
+    result.sort(FdroidIndexClient.searchComparator(needle));
+    return result;
+  }
+
+  private static boolean matchesSearch(Map<String,Object> app,String needle) {
+    if(needle.isEmpty())return true;
+    for(String key:new String[]{"name","id","summary","description"})
+      if(String.valueOf(app.getOrDefault(key,"")).toLowerCase(java.util.Locale.ROOT).contains(needle))return true;
+    String name=String.valueOf(app.getOrDefault("name","")).toLowerCase(java.util.Locale.ROOT);
+    int from=0;while((from=name.indexOf(needle,from))>=0){if(from==0||!Character.isLetterOrDigit(name.charAt(from-1)))return true;from++;}
+    return false;
+  }
+
   /** Rank from server download counts (log scale), with an anti-feature penalty. */
   static List<Map<String,Object>> popular(List<Map<String,Object>> apps, int limit, Map<String,Map<String,Object>> serverStats) {
     if (limit <= 0) throw new IllegalArgumentException("limit must be positive");
     List<Map<String,Object>> rows = new ArrayList<>();
     for (Map<String,Object> app : apps) {
-      Map<String,Object> row = new LinkedHashMap<>(app);
       String id = text(app.get("id")).toLowerCase(java.util.Locale.ROOT);
       Map<String,Object> stats = serverStats.get(id);
       if (stats == null) stats = java.util.Collections.emptyMap();
@@ -42,7 +65,7 @@ final class FdroidCatalog {
       int antiCount = anti instanceof List ? ((List<?>)anti).size() : 0;
       double penalty = Math.min(2.0, antiCount * 0.75);
       double score = Math.round(Math.max(0, Math.min(10, downloads * (10.0 / 6.0) - penalty)) * 10.0) / 10.0;
-      row.put("popularityScore", score); rows.add(row);
+      app.put("popularityScore", score); rows.add(app);
     }
     rows.sort((a,b) -> { int score = Double.compare(((Number)b.get("popularityScore")).doubleValue(), ((Number)a.get("popularityScore")).doubleValue()); return score != 0 ? score : text(a.get("id")).compareToIgnoreCase(text(b.get("id"))); });
     return new ArrayList<>(rows.subList(0, Math.min(limit, rows.size())));
