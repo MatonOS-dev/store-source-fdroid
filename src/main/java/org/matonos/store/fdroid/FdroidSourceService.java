@@ -324,7 +324,10 @@ public final class FdroidSourceService extends Service {
       ensureActive(task); if(!names.contains("base.apk"))throw new IllegalArgumentException("F-Droid package has no base APK"); task.callback.progress(task.op,"Verified APKs",100,0,0);
       task.callback.commit(task.op,task.id,names.toArray(new String[0]),descriptors.toArray(new ParcelFileDescriptor[0]),new String[0],new ICommitResult.Stub(){@Override public void result(boolean ok,String error){
         if(!task.terminal.compareAndSet(false,true)){Log.e(TAG,"Duplicate commit result op="+task.op);return;}
-        try{if(task.cancelled.get())task.callback.failed(task.op,"cancelled");else if(ok){getSharedPreferences("fdroid-install-origin",MODE_PRIVATE).edit().putString(task.id,task.repo).apply();task.callback.done(task.op);if(getSharedPreferences("fdroid-settings",MODE_PRIVATE).getBoolean("share_stats",true))postInstall(task.id);}else{Log.e(TAG,"Commit failed op="+task.op+" package="+task.id+": "+error);task.callback.failed(task.op,error);}}catch(RemoteException gone){Log.e(TAG,"Delivering terminal result op="+task.op+" failed",gone);}finally{operations.finish(task.op);installs.remove(task.op,task);}
+        try{if(task.cancelled.get())task.callback.failed(task.op,"cancelled");else if(ok){getSharedPreferences("fdroid-install-origin",MODE_PRIVATE).edit().putString(task.id,task.repo).apply();
+          // The package is installed now; drop any catalogue built while it was still
+          // pending so the store's refresh after done() sees it as installed.
+          invalidateCatalogue();task.callback.done(task.op);if(getSharedPreferences("fdroid-settings",MODE_PRIVATE).getBoolean("share_stats",true))postInstall(task.id);}else{Log.e(TAG,"Commit failed op="+task.op+" package="+task.id+": "+error);task.callback.failed(task.op,error);}}catch(RemoteException gone){Log.e(TAG,"Delivering terminal result op="+task.op+" failed",gone);}finally{operations.finish(task.op);installs.remove(task.op,task);}
       }});
     } catch(Exception error) {
       String message=task.cancelled.get()?"cancelled":text(error.getMessage()); if(!task.cancelled.get())Log.e(TAG,"Install op="+task.op+" package="+task.id+" failed",error);
