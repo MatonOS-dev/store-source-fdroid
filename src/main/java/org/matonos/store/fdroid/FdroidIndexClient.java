@@ -54,53 +54,33 @@ public final class FdroidIndexClient {
     return true;
   }
 
-  public List<Map<String, Object>> search(File cacheRoot, String repository, String query) throws Exception {
-    return search(cacheRoot, repository, OFFICIAL_FINGERPRINT, query);
+  public List<Map<String,Object>> catalogue(File cacheRoot,String repository,String fingerprint)throws Exception {
+    Map<String,Object> packages=map(load(cacheRoot,repository,fingerprint).get("packages"));
+    List<Map<String,Object>> rows=new ArrayList<>();
+    for(Object raw:packages.values()){Map<String,Object> app=map(raw);if(!app.isEmpty())rows.add(app);}
+    return rows;
   }
 
-  public List<Map<String, Object>> search(File cacheRoot, String repository, String fingerprint, String query) throws Exception {
-    Map<String, Object> catalogue = load(cacheRoot, repository, fingerprint);
-    Object packagesValue = catalogue.get("packages");
-    if (!(packagesValue instanceof Map)) return Collections.emptyList();
-    String needle = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
-    List<Map<String, Object>> apps = new ArrayList<>();
-    for (Map.Entry<?, ?> entry : ((Map<?, ?>) packagesValue).entrySet()) {
-      Map<String, Object> app = map(entry.getValue());
-      if (app != null && (needle.isEmpty() || searchRank(app, needle) < Integer.MAX_VALUE)) apps.add(app);
-    }
-    apps.sort(searchComparator(needle));
-    return apps;
+  interface CatalogueConsumer { void accept(Map<String,Object> row) throws Exception; }
+  private static final class CatalogueConsumerFailure extends RuntimeException {
+    final Exception cause;
+    CatalogueConsumerFailure(Exception cause){super(cause);this.cause=cause;}
   }
-
-  static Comparator<Map<String, Object>> searchComparator(String needle) {
-    return Comparator.comparingInt((Map<String, Object> app) -> searchRank(app, needle))
-        .thenComparing(a -> text(a.get("name")).toLowerCase(Locale.ROOT))
-        .thenComparing(a -> text(a.get("id")).toLowerCase(Locale.ROOT));
-  }
-
-  private static int searchRank(Map<String, Object> app, String needle) {
-    if (needle.isEmpty()) return 0;
-    String name = text(app.get("name")).toLowerCase(Locale.ROOT);
-    String id = text(app.get("id")).toLowerCase(Locale.ROOT);
-    String summary = text(app.get("summary")).toLowerCase(Locale.ROOT);
-    String description = text(app.get("description")).toLowerCase(Locale.ROOT);
-    if (name.equals(needle)) return 0;
-    if (name.startsWith(needle)) return 1;
-    if (containsNameWord(name, needle)) return 2;
-    if (name.contains(needle)) return 3;
-    if (id.contains(needle)) return 4;
-    if (summary.contains(needle)) return 5;
-    if (description.contains(needle)) return 6;
-    return Integer.MAX_VALUE;
-  }
-
-  private static boolean containsNameWord(String name, String needle) {
-    int from = 0;
-    while ((from = name.indexOf(needle, from)) >= 0) {
-      if (from == 0 || !Character.isLetterOrDigit(name.charAt(from - 1))) return true;
-      from++;
-    }
-    return false;
+  /** Ensures the signed index is current, then emits one package row at a time from its verified cache. */
+  public int forEachCatalogue(File cacheRoot,String repository,String fingerprint,CatalogueConsumer consumer)throws Exception {
+    load(cacheRoot,repository,fingerprint);
+    String repo=(repository==null||repository.isEmpty())?DEFAULT_REPO:repository;
+    String signer=FdroidRepository.normalizeFingerprint(fingerprint);
+    String key=fingerprint((repo+"\n"+signer).getBytes("UTF-8"));
+    File indexFile=new File(new File(cacheRoot,key),"index-v2.json");
+    final int[] count={0};
+    try(Reader reader=new InputStreamReader(new java.io.FileInputStream(indexFile),"UTF-8")) {
+      JsonStream.packages(reader,(id,raw)->{
+        try {Map<String,Object> row=app(id,raw);if(row!=null){consumer.accept(row);count[0]++;}}
+        catch(Exception error){throw new CatalogueConsumerFailure(error);}
+      });
+    } catch(CatalogueConsumerFailure error) {throw error.cause;}
+    return count[0];
   }
 
   public Map<String, Object> details(File cacheRoot, String repository, String packageName) throws Exception {

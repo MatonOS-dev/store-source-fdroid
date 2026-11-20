@@ -32,7 +32,7 @@ for kind in base split; do
   printf '<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.example.demo" %s android:versionCode="1"><uses-sdk android:minSdkVersion="37"/><application/></manifest>' "$split_attr" > "$TMP/AndroidManifest.xml"
   "$AAPT2" link --manifest "$TMP/AndroidManifest.xml" -I "$SDK/platforms/android-37.0/android.jar" -o "$TMP/$kind.apk"
 done
-javac -d "$TMP/classes" "$SRC/Json.java" "$SRC/JsonStream.java" "$SRC/FdroidCatalog.java" "$SRC/FdroidRepository.java" "$SRC/FdroidIndexClient.java" "$SRC/OperationTable.java" "$SRC/FdroidApkInstaller.java" "$SRC/FdroidSafety.java" "$SRC/FdroidMarkdown.java" "$SRC/ApkManifest.java" "$TEST/FdroidIndexClientTest.java"
+javac -d "$TMP/classes" "$SRC/Json.java" "$SRC/JsonStream.java" "$SRC/FdroidCatalog.java" "$SRC/FdroidRepository.java" "$SRC/FdroidIndexClient.java" "$SRC/OperationTable.java" "$SRC/FdroidCatalogueWriter.java" "$TEST/FdroidCatalogueWriterTest.java" "$SRC/FdroidApkInstaller.java" "$SRC/FdroidSafety.java" "$SRC/FdroidMarkdown.java" "$SRC/ApkManifest.java" "$TEST/FdroidIndexClientTest.java"
 mkdir -p "$TMP/payload2"
 printf '{"packages":{},"changed":true}\n' > "$TMP/index-v2-changed.json"
 CHANGED_HASH=$(sha256sum "$TMP/index-v2-changed.json" | cut -d' ' -f1)
@@ -55,3 +55,5 @@ with open(path,'w') as f:
     f.write(suffix)
 PY
 /usr/bin/time -f 'large-index peak RSS: %M KiB' java -Xmx160m -cp "$TMP/classes" org.matonos.store.fdroid.FdroidIndexClientTest "$TMP/large-index.json"
+
+java -cp "$TMP/classes" org.matonos.store.fdroid.FdroidCatalogueWriterTest "$TMP/catalogue.json"

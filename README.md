@@ -4,7 +4,7 @@
 
 The original Java index client, repository validation, JSON reader, SHA-256 verifier and host test moved from the store module. Repository preferences and installed-package signer/version inspection were ported from Kotlin to Java. All 17 preset URLs and signing fingerprints are preserved, as is the official fingerprint. Presets seed once; the official repository cannot be removed. Additions require a signing fingerprint in the share URL. Failed verification leaves the repository visibly broken and logs the cause; removing a preset keeps it removed.
 
-Each catalogue authenticates `entry.jar`, pins its certificate, then checks the signed index SHA-256 before parsing or caching. Typed listings retain the package name as `id` and the repository URL as `repo`; an app in multiple repositories appears once for each. Details and installs resolve the requested `(id, repo)` pair directly. List methods page by offset and limit. Details include typed anti-feature and safety objects. SDK requirements, native ABIs and required features filter versions. Installed listings and updates require matching current signing-certificate sets. Exact signer matching deliberately retains the existing behavior (certificate rotation lineage is not supported).
+Each catalogue authenticates `entry.jar`, pins its certificate, then checks the signed index SHA-256 before parsing or caching. Typed listings retain the package name as `id` and the repository URL as `repo`; an app in multiple repositories appears once for each. Details and installs resolve the requested `(id, repo)` pair directly. The source writes a streamed UTF-8 catalogue JSON file and returns a read-only descriptor; the store owns search, Popular, New, installed, and update queries. Details include typed anti-feature and safety objects. SDK requirements, native ABIs and required features filter versions. Installed listings and updates require matching current signing-certificate sets. Exact signer matching deliberately retains the existing behavior (certificate rotation lineage is not supported).
 
 Install immediately starts background work. It selects the requested repository's compatible release, downloads every APK, checks all SHA-256 values and package/split identities, opens read-only descriptors and calls the store's `commit` exactly once with no removed splits. Only the commit-result callback reports success/failure. Cancellation interrupts download work and ends with `failed(operationId, "cancelled")`; if a commit is already in flight, the store may finish that session but the source still reports cancellation. Local descriptors and temporary APKs are removed after Binder transfers their copies. Standalone split names are read from binary manifests because PackageManager's archive parser expects a base APK. This backend never calls PackageInstaller.
 
@@ -23,12 +23,12 @@ The staged `buildinfra/apps-built/FdroidSource.apk` is imported by `apps/Android
 
 ## Verification
 
-- `bash test-host.sh`: signed JAR and tampering, signer pin, index hash, split file parsing, SHA-256 rejection, update signer/version eligibility, URL/fingerprint validation, compatible version choice, safety mapping, base/split manifest validation, repo-specific candidate identity and selection, and paging.
+- `bash test-host.sh`: signed JAR and tampering, signer pin, index hash, split file parsing, SHA-256 rejection, update signer/version eligibility, URL/fingerprint validation, compatible version choice, safety mapping, base/split manifest validation, repo-specific candidate identity/selection and the large catalogue writer.
 - Gradle `assembleDebug` assembles the typed AIDL-backed APK.
 - In `rn-apps/flathub`: `npx tsc --noEmit -p .` and `npx eslint src`.
 - Store signed release build and release linkage check passed; the final store module compiled. Preflight passed all six checks with the host bpfmt on PATH and read-only links to existing unrelated prebuilts in this isolated worktree.
 
-No image build, QEMU boot or device installation is authorized for this task. End-to-end Binder transfer, PackageInstaller confirmation and default enablement still need a fresh image test. Public repositories have not been exercised by these fixture tests. Repositories are checked sequentially with bounded network timeouts; a slow/offline preset can delay catalogue calls. If every repository fails, the call fails loudly; partial failures are logged and marked broken while other repositories remain usable. Large queries can still hit Binder's transaction-size limit; pagination would require a future contract revision.
+No image build, QEMU boot or device installation is authorized for this task. End-to-end Binder transfer, PackageInstaller confirmation and default enablement still need a fresh image test. Public repositories have not been exercised by these fixture tests. Repositories are checked sequentially with bounded network timeouts; a slow/offline preset can delay catalogue calls. If every repository fails, the call fails loudly; partial failures are logged and marked broken while other repositories remain usable. Catalogue transfer uses a file descriptor, avoiding Binder payload limits. The store reimports only when the persistent catalogue generation changes.
 
 ## Fresh-image checks (all supported PCs)
 
@@ -41,3 +41,10 @@ No image build, QEMU boot or device installation is authorized for this task. En
 
 The `new` collection orders compatible entries by their index `added`
 timestamp, newest first. Popular uses server download counts on a logarithmic scale (up to 10 points); anti-features subtract up to 2 points. A new server or app with no stats gets score zero. Stats refresh in the background about once per day and persist in the plugin's private cache. Successful store commits are reported when `share_stats` is on. Ratings are submitted and displayed by the store's generic ratings service; this plugin does not read or emit ratings. The downloads API is `https://maton.hanro50.net.za/api/fdroid`.
+
+
+## Catalogue contract v5
+
+The plugin persists `store-catalogue.json` in its private files directory and returns it read-only through `catalogue()`. Rows contain the `AppListing` fields plus repository label/priority, popularity score, current version, signer match, installability, and update state. The writer emits one row at a time; the host suite streams 75,000 synthetic rows and verifies the complete output. `catalogueVersion()` is a persistent generation bumped when repository or installed-package state changes and when the catalogue refreshes after six hours.
+
+Validation: `./test-host.sh` covers the signed index fixtures, the 100 MiB streaming index, and the 75,000-row catalogue writer. Android APK compilation and fresh-image Binder transfer remain to be checked; no deployment or VM work was performed.

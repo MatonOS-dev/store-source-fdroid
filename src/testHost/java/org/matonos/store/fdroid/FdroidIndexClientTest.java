@@ -59,15 +59,10 @@ public final class FdroidIndexClientTest {
     testUpdateEligibility(client, parsed);
     testRepositoryChanges();
     testCompatibility();
-    testSearchRanking();
-    testRecentlyAddedCollection();
-    testSharedCatalogueViews();
     testPopularityScoring();
     testSafety();
     testManifest(signedJar.getParentFile());
     testTypedCatalogContract();
-    testParallelRepoOrderAndPageCache();
-    testIndependentQueryLocksOverlap();
     testHttpCatalogueCache(signedJar, certFile, new File(args[2]), new File(args[3]), new File(args[4]));
     testOperationTable();
     System.out.println("PASS: signed JAR, signer pin, index hash, index parser, APK hash before commit, update signer/version checks, repository trust/removal");
@@ -77,65 +72,15 @@ public final class FdroidIndexClientTest {
     String converted=FdroidMarkdown.convert("<p>Thunderbird <strong>mail</strong></p><p>What you can do</p><ul><li>Use one app with an optional Unified Inbox.</li><li><a href=\"https://thunderbird.net\">Visit Thunderbird</a></li></ul>");
     check(converted.contains("Thunderbird **mail**")&&converted.contains("What you can do")&&converted.contains("optional Unified Inbox")&&converted.contains("[Visit Thunderbird](https://thunderbird.net)"),"F-Droid Thunderbird HTML description converts to CommonMark");
   }
-  private static void testSearchRanking() {
-    java.util.Map<String,Object> bendy = new java.util.LinkedHashMap<>();
-    bendy.put("id", "com.example.bendystraw"); bendy.put("name", "BendyStraw");
-    bendy.put("summary", "An app for managing NewPipe databases");
-    java.util.Map<String,Object> newpipe = new java.util.LinkedHashMap<>();
-    newpipe.put("id", "org.schabi.newpipe"); newpipe.put("name", "NewPipe");
-    newpipe.put("summary", "A video player");
-    java.util.Map<String,Object> prefix = new java.util.LinkedHashMap<>();
-    prefix.put("id", "org.example.newpipe.fork"); prefix.put("name", "NewPipe Fork");
-    java.util.Map<String,Object> idMatch = new java.util.LinkedHashMap<>();
-    idMatch.put("id", "org.example.newpipe.extra"); idMatch.put("name", "Other App");
-    java.util.List<java.util.Map<String,Object>> results = new java.util.ArrayList<>(java.util.List.of(bendy, idMatch, prefix, newpipe));
-    results.sort(FdroidIndexClient.searchComparator("newpipe"));
-    check(results.equals(java.util.List.of(newpipe, prefix, idMatch, bendy)),
-        "NewPipe exact name precedes prefix, summary-only BendyStraw, and package ID match");
-    check(results.subList(0, 2).equals(java.util.List.of(newpipe, prefix))
-        && results.subList(2, 4).equals(java.util.List.of(idMatch, bendy)),
-        "search ranking stays fixed across offset pages");
-    java.util.Map<String,Object> word = new java.util.LinkedHashMap<>();
-    word.put("id", "org.example.other"); word.put("name", "Player NewPipe Edition");
-    check(FdroidIndexClient.searchComparator("newpipe").compare(word, idMatch) < 0,
-        "name word match precedes summary match");
-  }
-
-  private static void testRecentlyAddedCollection() {
-    java.util.Map<String,Object> old=new java.util.LinkedHashMap<>();old.put("id","org.example.old");old.put("added",100L);
-    java.util.Map<String,Object> newest=new java.util.LinkedHashMap<>();newest.put("id","org.example.newest");newest.put("added",300L);
-    java.util.Map<String,Object> middle=new java.util.LinkedHashMap<>();middle.put("id","org.example.middle");middle.put("added","200");
-    java.util.List<java.util.Map<String,Object>> sorted=FdroidCatalog.recentlyAdded(java.util.List.of(old,newest,middle));
-    check("org.example.newest".equals(sorted.get(0).get("id"))&&"org.example.middle".equals(sorted.get(1).get("id"))&&"org.example.old".equals(sorted.get(2).get("id")),
-        "new collection is ordered by added timestamp from the cached index");
-  }
-  private static void testSharedCatalogueViews() {
-    java.util.concurrent.atomic.AtomicInteger builds=new java.util.concurrent.atomic.AtomicInteger();
-    java.util.List<java.util.Map<String,Object>> catalogue=new java.util.ArrayList<>(10_000*3);
-    for(int repo=0;repo<3;repo++)for(int app=0;app<10_000;app++){
-      java.util.Map<String,Object> row=new java.util.LinkedHashMap<>();row.put("id","org.example.app"+app);row.put("repo","repo"+repo);row.put("name","App "+app);row.put("summary","Synthetic listing");row.put("added",(long)app);catalogue.add(row);
-    }
-    // Model the shared cache builder used by listing views: all endpoints reuse these row objects.
-    java.util.function.Supplier<java.util.List<java.util.Map<String,Object>>> shared=()->{builds.incrementAndGet();return catalogue;};
-    java.util.List<java.util.Map<String,Object>> base=shared.get();
-    java.util.List<java.util.Map<String,Object>> popular=FdroidCatalog.popular(base,20,java.util.Collections.emptyMap());
-    java.util.List<java.util.Map<String,Object>> recent=FdroidCatalog.recentlyAdded(base);
-    java.util.List<java.util.Map<String,Object>> emptySearch=FdroidCatalog.filterSearch(base,"");
-    java.util.Map<String,java.util.List<java.util.Map<String,Object>>> byId=FdroidCatalog.byId(base);
-    check(popular.size()==20&&recent.size()==30_000&&emptySearch.size()==30_000,"shared catalogue supports Popular, New, empty search and repoOptions index");
-    check(builds.get()==1,"four catalogue views use one catalogue build");
-    check(base.contains(recent.get(0))&&emptySearch.get(0)==base.get(0)&&byId.get("org.example.app42").size()==3,"derived catalogue views and repo index retain shared row objects");
-    System.out.println("PASS: 10,000 apps x 3 repos; one build serves Popular, New, empty search and repoOptions; rows="+base.size()+", map rows retained by derived views without row copies");
-  }
   private static void testPopularityScoring() {
     java.util.Map<String,Object> quiet=new java.util.LinkedHashMap<>();quiet.put("id","org.example.quiet");
     java.util.Map<String,Object> popular=new java.util.LinkedHashMap<>();popular.put("id","org.example.popular");
     java.util.Map<String,java.util.Map<String,Object>> stats=new java.util.HashMap<>();
     stats.put("org.example.popular",java.util.Map.of("downloads",10000));
-    java.util.List<java.util.Map<String,Object>> scored=FdroidCatalog.popular(java.util.List.of(quiet,popular),2,stats);
-    check(scored.size()==2&&"org.example.popular".equals(scored.get(0).get("id")),"server download stats rank the popular app first");
-    check(((Number)scored.get(0).get("popularityScore")).doubleValue()<=10.0,"server popularity score stays within the 0–10 range");
-    check(((Number)scored.get(1).get("popularityScore")).doubleValue()==0.0,"empty server stats give a new app a zero score");
+    double popularScore=FdroidCatalog.popularityScore(popular,stats),quietScore=FdroidCatalog.popularityScore(quiet,stats);
+    check(popularScore>quietScore,"server download stats rank the popular app first");
+    check(popularScore<=10.0,"server popularity score stays within the 0–10 range");
+    check(quietScore==0.0,"empty server stats give a new app a zero score");
   }
   private static void testLargeStreamingIndex(File file) throws Exception {
     check(file.length() >= 100L * 1024 * 1024, "synthetic index is at least 100 MiB");
@@ -187,31 +132,31 @@ public final class FdroidIndexClientTest {
       java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
       CountDownLatch start = new CountDownLatch(1);
       try {
-        java.util.concurrent.Future<?> a = pool.submit(() -> { try { start.await(); client.search(cache, repo, signer, ""); } catch (Exception e) { throw new RuntimeException(e); } });
-        java.util.concurrent.Future<?> b = pool.submit(() -> { try { start.await(); client.search(cache, repo, signer, ""); } catch (Exception e) { throw new RuntimeException(e); } });
+        java.util.concurrent.Future<?> a = pool.submit(() -> { try { start.await(); client.catalogue(cache, repo, signer); } catch (Exception e) { throw new RuntimeException(e); } });
+        java.util.concurrent.Future<?> b = pool.submit(() -> { try { start.await(); client.catalogue(cache, repo, signer); } catch (Exception e) { throw new RuntimeException(e); } });
         start.countDown(); a.get(); b.get();
       } finally { pool.shutdownNow(); }
       check(entryRequests.get() == 1 && indexRequests.get() == 1, "concurrent loads share one entry and index download");
       int parses = client.parseCountForTest();
-      client.search(cache, repo, signer, "");
+      client.catalogue(cache, repo, signer);
       check(entryRequests.get() == 2 && indexRequests.get() == 1, "304 retains verified index without downloading it");
       check(client.parseCountForTest() == parses, "304 keeps parsed catalogue without reparsing");
       changed.set(true);
-      client.search(cache, repo, signer, "");
+      client.catalogue(cache, repo, signer);
       check(indexRequests.get() == 2, "changed entry index hash downloads replacement index");
       check(client.parseCountForTest() == parses + 2, "changed hash reparses entry and catalogue");
       FdroidIndexClient cold = new FdroidIndexClient();
       // A fresh client with a 304 must recover the verified catalogue from disk.
-      cold.search(cache, repo, signer, "");
+      cold.catalogue(cache, repo, signer);
       check(cold.parseCountForTest() == 1, "cold 304 parses verified index from disk");
       // A failed verification must not leave validators behind: the next load
       // has no index to answer a 304 from and must fetch the entry again.
       File failedCache = Files.createTempDirectory("fdroid-cache-failed").toFile();
       brokenIndexOnce.set(true);
       boolean rejected = false;
-      try { new FdroidIndexClient().search(failedCache, repo, signer, ""); } catch (Exception expected) { rejected = true; }
+      try { new FdroidIndexClient().catalogue(failedCache, repo, signer); } catch (Exception expected) { rejected = true; }
       check(rejected, "index with wrong hash is rejected");
-      new FdroidIndexClient().search(failedCache, repo, signer, "");
+      new FdroidIndexClient().catalogue(failedCache, repo, signer);
     } finally {
       server.stop(0);
       File[] files = cache.listFiles(); if (files != null) for (File file : files) { File[] nested=file.listFiles(); if(nested!=null)for(File child:nested)child.delete(); file.delete(); }
@@ -219,73 +164,12 @@ public final class FdroidIndexClientTest {
     }
   }
 
-  private static void testParallelRepoOrderAndPageCache() throws Exception {
-    java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
-    try {
-      long started = System.nanoTime();
-      java.util.List<java.util.concurrent.Future<java.util.List<String>>> futures = FdroidCatalog.submitOrdered(java.util.List.of("first", "second"), pool, repo -> {
-        Thread.sleep(450);
-        return java.util.List.of(repo + "-result");
-      });
-      java.util.List<String> merged = new java.util.ArrayList<>();
-      for (java.util.concurrent.Future<java.util.List<String>> future : futures) merged.addAll(future.get());
-      long elapsedMs = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
-      check(merged.equals(java.util.List.of("first-result", "second-result")), "parallel repo merge retains input order");
-      check(elapsedMs < 800, "slow repositories execute in parallel (elapsed " + elapsedMs + "ms)");
-    } finally { pool.shutdownNow(); }
-
-    java.util.Map<String, java.util.List<String>> cache = new java.util.HashMap<>();
-    java.util.concurrent.atomic.AtomicInteger refreshes = new java.util.concurrent.atomic.AtomicInteger();
-    FdroidCatalog.CheckedSupplier<java.util.List<String>> refresh = () -> {
-      refreshes.incrementAndGet(); return java.util.List.of("a", "b", "c");
-    };
-    java.util.List<String> firstPage = FdroidCatalog.page(FdroidCatalog.cachedQueryPage(cache, "search", "term", 0, refresh), 0, 2);
-    java.util.List<String> secondPage = FdroidCatalog.page(FdroidCatalog.cachedQueryPage(cache, "search", "term", 2, refresh), 2, 2);
-    check(firstPage.equals(java.util.List.of("a", "b")) && secondPage.equals(java.util.List.of("c")), "page two slices the cached query result");
-    check(refreshes.get() == 1, "page two does not refresh catalogue query");
-  }
-
-  private static void testIndependentQueryLocksOverlap() throws Exception {
-    java.util.concurrent.ConcurrentMap<String,Object> locks = new java.util.concurrent.ConcurrentHashMap<>();
-    java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(2);
-    java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
-    try {
-      java.util.concurrent.Future<String> search = pool.submit(() -> FdroidCatalog.withKeyLock(locks, "search\nterm", () -> {
-        entered.countDown();
-        if (!entered.await(2, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("search waited behind another query key");
-        return "search";
-      }));
-      java.util.concurrent.Future<String> updates = pool.submit(() -> FdroidCatalog.withKeyLock(locks, "updates\n", () -> {
-        entered.countDown();
-        if (!entered.await(2, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("updates waited behind another query key");
-        return "updates";
-      }));
-      check("search".equals(search.get(3, java.util.concurrent.TimeUnit.SECONDS))
-          && "updates".equals(updates.get(3, java.util.concurrent.TimeUnit.SECONDS)),
-          "independent query keys overlap their cache fills");
-    } finally { pool.shutdownNow(); }
-  }
-
   private static void testTypedCatalogContract() throws Exception {
-    java.util.Map<String,Object> app = new java.util.LinkedHashMap<>(); app.put("id", "org.example.same");
-    java.util.List<java.util.Map<String,Object>> first = FdroidCatalog.candidates(java.util.List.of(app), "https://one.example/repo");
-    java.util.List<java.util.Map<String,Object>> second = FdroidCatalog.candidates(java.util.List.of(app), "https://two.example/repo");
-    java.util.List<java.util.Map<String,Object>> combined = new java.util.ArrayList<>(); combined.addAll(first); combined.addAll(second);
-    check(combined.size() == 2, "same package remains two repo candidates");
-    check("org.example.same".equals(combined.get(0).get("id")), "candidate id stays package name");
-    check("https://one.example/repo".equals(combined.get(0).get("repo")), "first candidate repo id");
-    check("https://two.example/repo".equals(combined.get(1).get("repo")), "second candidate repo id");
     java.util.Map<String,Object> one = new java.util.LinkedHashMap<>(); one.put("id", "https://one.example/repo"); one.put("url", "https://one.example/repo");
     java.util.Map<String,Object> two = new java.util.LinkedHashMap<>(); two.put("id", "https://two.example/repo"); two.put("url", "https://two.example/repo");
     java.util.List<java.util.Map<String,Object>> repos = java.util.List.of(one, two);
     check(FdroidCatalog.repository(repos, "https://two.example/repo") == two, "details and install resolve the selected repo only");
     expectIllegalArgument(() -> FdroidCatalog.repository(repos, "missing"), "unknown candidate repo");
-    java.util.List<Integer> values = java.util.List.of(0,1,2,3,4);
-    check(FdroidCatalog.page(values, 1, 2).equals(java.util.List.of(1,2)), "page offset and limit");
-    check(FdroidCatalog.page(values, 4, 20).equals(java.util.List.of(4)), "short final page");
-    check(FdroidCatalog.page(values, 8, 2).isEmpty(), "past-end page");
-    expectIllegalArgument(() -> FdroidCatalog.page(values, -1, 2), "negative page offset");
-    expectIllegalArgument(() -> FdroidCatalog.page(values, 0, 0), "zero page limit");
   }
 
   private static void testCompatibility() {
