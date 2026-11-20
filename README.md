@@ -40,16 +40,11 @@ No image build, QEMU boot or device installation is authorized for this task. En
 6. Uninstall through the store and confirm the generic receiver completes the operation. Test an offline install and denied/cancelled package confirmation: one failure result, no stale busy indicator. Verify the plugin itself has no install/delete privilege.
 
 The `new` collection orders compatible entries by their index `added`
-timestamp, newest first. F-Droid publishes no download counts, so Popular uses
-a 0–10 heuristic: 6 points for a curated set of widely used F-Droid apps,
-listed in `src/main/assets/known-apps.txt`; up to 1.5 for release history
-(`0.55 × ln(versionCount)`); up to 0.75 for catalogue age (five-year ramp);
-and up to 1 for an index `lastUpdated` within two years. Each anti-feature
-subtracts 0.75, capped at 2 points. Missing metadata contributes zero; the
-result is clamped to 0–10 and rounded to one decimal. The curated IDs provide
-a transparent seed because the signed index has no downloads, ratings,
-featured flag, or other popularity measure. History, age, and freshness can
-still rank apps within that familiar group without letting a newly updated
-niche app outrank the curated apps. The store interleaves equal-score source
-results round-robin, so F-Droid does not dominate other enabled sources just
-by appearing first.
+timestamp, newest first. Popular uses server download counts on a logarithmic
+scale (up to 6 points) plus server ratings (up to 3 points); anti-features
+subtract up to 2 points. A new server or app with no stats gets score zero.
+Stats refresh in the background about once per day and persist in the plugin's
+private cache. Successful store commits are reported when `share_stats` is on.
+The source contract currently has no user rating submission method, so this
+plugin displays the server rating summary but cannot submit ratings from store
+UI. The API is `https://maton.hanro50.net.za/api/fdroid`.

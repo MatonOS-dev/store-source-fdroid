@@ -5,6 +5,8 @@ import android.content.Intent;
 import android.content.pm.*;
 import android.os.*;
 import android.util.Log;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import org.matonos.store.source.*;
 import org.matonos.store.source.types.*;
 import java.io.*;
@@ -22,7 +24,10 @@ public final class FdroidSourceService extends Service {
   private static final String TAG = "FdroidSource";
   private FdroidRepositories repositories;
   private FdroidIndexClient client;
-  private Set<String> knownApps = Collections.emptySet();
+  private static final String STATS_URL = "https://maton.hanro50.net.za/api/fdroid";
+  private volatile Map<String, Map<String, Object>> serverStats = Collections.emptyMap();
+  private volatile long statsFetchedAt;
+  private final AtomicBoolean statsRefresh = new AtomicBoolean();
   private final Map<String, InstallTask> installs = new ConcurrentHashMap<>();
   private final OperationTable operations = new OperationTable();
   private final Map<String, List<Map<String,Object>>> queryResults = new ConcurrentHashMap<>();
@@ -33,21 +38,12 @@ public final class FdroidSourceService extends Service {
     Set<String> features = new HashSet<>();
     for (FeatureInfo f : getPackageManager().getSystemAvailableFeatures()) if (f.name != null) features.add(f.name);
     client = new FdroidIndexClient(37, Arrays.asList(Build.SUPPORTED_ABIS), features);
-    knownApps = loadKnownApps();
-  }
-
-  private Set<String> loadKnownApps() {
-    Set<String> result = new HashSet<>();
-    try (BufferedReader reader = new BufferedReader(new InputStreamReader(getAssets().open("known-apps.txt"), "UTF-8"))) {
-      String line;
-      while ((line = reader.readLine()) != null) {
-        String id = line.split("#", 2)[0].trim().toLowerCase(Locale.ROOT);
-        if (!id.isEmpty()) result.add(id);
-      }
-    } catch (Exception error) {
-      Log.e(TAG, "Loading curated known-app popularity IDs failed; continuing without curation", error);
-    }
-    return result;
+    try {
+      android.content.SharedPreferences cache = getSharedPreferences("fdroid-server-stats", MODE_PRIVATE);
+      String raw = cache.getString("json", null); statsFetchedAt = cache.getLong("fetched", 0);
+      if (raw != null) serverStats = parseStats(new JSONObject(raw));
+    } catch (Exception error) { Log.w(TAG, "Reading cached F-Droid stats failed", error); }
+    refreshStats(false);
   }
 
   private interface Call<T> { T run() throws Exception; }
@@ -166,7 +162,8 @@ public final class FdroidSourceService extends Service {
     @Override public boolean running(String op) { return operations.running(op); }
     @Override public PopularApp[] getPopularApps(int limit) {
       return call("popularApps", () -> {
-        List<Map<String,Object>> rows = FdroidCatalog.popular(queryCatalogue("search", "", 0), limit, knownApps);
+        refreshStats(false);
+        List<Map<String,Object>> rows = FdroidCatalog.popular(queryCatalogue("search", "", 0), limit, serverStats);
         List<PopularApp> result = new ArrayList<>();
         for (Map<String,Object> row : rows) {
           PopularApp item = new PopularApp(); item.app = listingArray(Collections.singletonList(row))[0];
@@ -184,6 +181,8 @@ public final class FdroidSourceService extends Service {
     for (Map<String, Object> app : apps) {
       Map<String, Object> row = new LinkedHashMap<>();
       for (String key : new String[]{"id", "packageName", "name", "summary", "icon", "developer", "installed", "versionName", "repo", "added", "lastUpdated", "versionCount", "antiFeatures", "repoOptions"}) if (app.containsKey(key)) row.put(key, app.get(key));
+      Map<String,Object> stats=serverStats.get(text(app.get("id")).toLowerCase(Locale.ROOT));
+      if(stats!=null){row.put("serverRating",stats.get("ratingAvg"));row.put("serverRatingCount",stats.get("ratingCount"));row.put("serverRatingHistogram",stats.get("ratingHistogram"));}
       result.add(row);
     }
     return result;
@@ -197,6 +196,7 @@ public final class FdroidSourceService extends Service {
       item.installed = Boolean.TRUE.equals(row.get("installed")); item.repo = text(row.get("repo"));
       item.versionName = nullable(row.get("versionName")); item.packageName = nullable(row.get("packageName")); item.badges = badges(row); result[i] = item;
       item.added = Math.max(0, number(row.get("added")));
+      if (row.containsKey("serverRating")) { item.rating = new Rating(); item.rating.average = ((Number)row.get("serverRating")).floatValue(); item.rating.count = (int)number(row.get("serverRatingCount")); Object[] values=(Object[])row.get("serverRatingHistogram"); item.rating.histogram=new int[5]; for(int j=0;j<Math.min(5,values.length);j++)item.rating.histogram[j]=((Number)values[j]).intValue(); }
       Object rawOptions=row.get("repoOptions");if(rawOptions instanceof List){List<?> values=(List<?>)rawOptions;item.repoOptions=new RepoOption[values.size()];for(int j=0;j<values.size();j++){if(!(values.get(j) instanceof Map))continue;Map<?,?> value=(Map<?,?>)values.get(j);RepoOption option=new RepoOption();option.repoId=text(value.get("repoId"));option.name=text(value.get("name"));option.version=nullable(value.get("version"));option.installable=!Boolean.FALSE.equals(value.get("installable"));option.note=nullable(value.get("note"));item.repoOptions[j]=option;}}
     }
     return result;
@@ -317,7 +317,7 @@ public final class FdroidSourceService extends Service {
       ensureActive(task); if(!names.contains("base.apk"))throw new IllegalArgumentException("F-Droid package has no base APK"); task.callback.progress(task.op,"Verified APKs",100,0,0);
       task.callback.commit(task.op,task.id,names.toArray(new String[0]),descriptors.toArray(new ParcelFileDescriptor[0]),new String[0],new ICommitResult.Stub(){@Override public void result(boolean ok,String error){
         if(!task.terminal.compareAndSet(false,true)){Log.e(TAG,"Duplicate commit result op="+task.op);return;}
-        try{if(task.cancelled.get())task.callback.failed(task.op,"cancelled");else if(ok){getSharedPreferences("fdroid-install-origin",MODE_PRIVATE).edit().putString(task.id,task.repo).apply();task.callback.done(task.op);}else{Log.e(TAG,"Commit failed op="+task.op+" package="+task.id+": "+error);task.callback.failed(task.op,error);}}catch(RemoteException gone){Log.e(TAG,"Delivering terminal result op="+task.op+" failed",gone);}finally{operations.finish(task.op);installs.remove(task.op,task);}
+        try{if(task.cancelled.get())task.callback.failed(task.op,"cancelled");else if(ok){getSharedPreferences("fdroid-install-origin",MODE_PRIVATE).edit().putString(task.id,task.repo).apply();task.callback.done(task.op);if(getSharedPreferences("fdroid-settings",MODE_PRIVATE).getBoolean("share_stats",true))postInstall(task.id);}else{Log.e(TAG,"Commit failed op="+task.op+" package="+task.id+": "+error);task.callback.failed(task.op,error);}}catch(RemoteException gone){Log.e(TAG,"Delivering terminal result op="+task.op+" failed",gone);}finally{operations.finish(task.op);installs.remove(task.op,task);}
       }});
     } catch(Exception error) {
       String message=task.cancelled.get()?"cancelled":text(error.getMessage()); if(!task.cancelled.get())Log.e(TAG,"Install op="+task.op+" package="+task.id+" failed",error);
@@ -336,6 +336,44 @@ public final class FdroidSourceService extends Service {
     try{int status=connection.getResponseCode();if(status<200||status>=300)throw new IOException("HTTP "+status+" downloading "+connection.getURL());long total=connection.getContentLengthLong(),done=0,reported=0;
       try(InputStream in=connection.getInputStream();FileOutputStream out=new FileOutputStream(destination)){byte[] buffer=new byte[65536];int n;while((n=in.read(buffer))!=-1){ensureActive(task);out.write(buffer,0,n);done+=n;long now=SystemClock.elapsedRealtime();if(now-reported>=250){task.callback.progress(task.op,"Downloading APK "+(index+1)+" of "+count,total>0?(int)((index*100L+done*100/total)/count):-1,done,total);reported=now;}}}
     }finally{task.connection=null;connection.disconnect();}
+  }
+
+  private void refreshStats(boolean force) {
+    long now = System.currentTimeMillis();
+    if (!force && now - statsFetchedAt < 24L * 60 * 60 * 1000) return;
+    if (!statsRefresh.compareAndSet(false, true)) return;
+    Thread thread = new Thread(() -> {
+      try {
+        HttpURLConnection connection = (HttpURLConnection)new URL(STATS_URL + "/stats").openConnection();
+        connection.setConnectTimeout(5000); connection.setReadTimeout(5000);
+        try (InputStream in = connection.getInputStream(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+          byte[] buffer = new byte[8192]; int n; while ((n = in.read(buffer)) != -1 && out.size() < 2 * 1024 * 1024) out.write(buffer, 0, n);
+          JSONObject root = new JSONObject(out.toString("UTF-8"));
+          serverStats = parseStats(root); statsFetchedAt = System.currentTimeMillis();
+          getSharedPreferences("fdroid-server-stats", MODE_PRIVATE).edit().putString("json", root.toString()).putLong("fetched", statsFetchedAt).apply();
+        } finally { connection.disconnect(); }
+      } catch (Exception error) { Log.w(TAG, "Refreshing F-Droid stats failed; using cached values", error); }
+      finally { statsRefresh.set(false); }
+    }, "fdroid-stats"); thread.setDaemon(true); thread.start();
+  }
+
+  private Map<String, Map<String, Object>> parseStats(JSONObject root) throws Exception {
+    Map<String, Map<String, Object>> result = new HashMap<>();
+    java.util.Iterator<String> keys = root.keys(); while (keys.hasNext()) { String key = keys.next(); JSONObject value = root.getJSONObject(key); Map<String, Object> row = new HashMap<>(); row.put("downloads", value.optInt("downloads")); row.put("ratingCount", value.optInt("ratingCount")); row.put("ratingAvg", value.optDouble("ratingAvg")); JSONArray histogram=value.optJSONArray("ratingHistogram"); Object[] bins=new Object[5]; for(int i=0;i<5;i++)bins[i]=histogram==null?0:histogram.optInt(i); row.put("ratingHistogram",bins); result.put(key.toLowerCase(Locale.ROOT), row); }
+    return result;
+  }
+
+  private void postInstall(String packageName) {
+    Thread thread = new Thread(() -> {
+      try {
+        HttpURLConnection connection = (HttpURLConnection)new URL(STATS_URL + "/install").openConnection();
+        connection.setConnectTimeout(5000); connection.setReadTimeout(5000); connection.setRequestMethod("POST"); connection.setDoOutput(true); connection.setRequestProperty("Content-Type", "application/json");
+        byte[] body = new JSONObject().put("packageName", packageName).toString().getBytes("UTF-8");
+        try (OutputStream out = connection.getOutputStream()) { out.write(body); }
+        int status = connection.getResponseCode(); if (status < 200 || status >= 300) Log.w(TAG, "F-Droid install stats returned HTTP " + status);
+        connection.disconnect();
+      } catch (Exception error) { Log.w(TAG, "Sending F-Droid install stats failed for " + packageName, error); }
+    }, "fdroid-install-stats"); thread.setDaemon(true); thread.start();
   }
   private static String text(Object value){return value==null?"":String.valueOf(value);}
   private static long number(Object value){return value instanceof Number?((Number)value).longValue():-1;}

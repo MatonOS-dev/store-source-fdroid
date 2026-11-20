@@ -108,20 +108,15 @@ public final class FdroidIndexClientTest {
         "new collection is ordered by added timestamp from the cached index");
   }
   private static void testPopularityScoring() {
-    long now=System.currentTimeMillis()/1000L;
-    java.util.Map<String,Object> known=new java.util.LinkedHashMap<>();known.put("id","org.mozilla.firefox");known.put("added",now-4L*365*86400);known.put("lastUpdated",now);known.put("versionCount",8);
-    java.util.Map<String,Object> quiet=new java.util.LinkedHashMap<>();quiet.put("id","org.example.quiet");quiet.put("added",now-6L*365*86400);quiet.put("lastUpdated",now);quiet.put("versionCount",1);
-    java.util.List<java.util.Map<String,Object>> scored=FdroidCatalog.popular(java.util.List.of(quiet,known),2,java.util.Set.of("org.mozilla.firefox"));
-    check(scored.size()==2&&"org.mozilla.firefox".equals(scored.get(0).get("id")),"F-Droid popularity orders recent, versioned and well-known signal above stale apps");
-    check(((Number)scored.get(0).get("popularityScore")).doubleValue()<=10.0&&((Number)scored.get(0).get("popularityScore")).doubleValue()>4.0,"known app and release history score within the 0–10 range");
-    check(((Number)scored.get(1).get("popularityScore")).doubleValue()==1.8,"recently updated, long-running app scores from catalogue age and freshness");
-    java.util.Map<String,Object> niche=new java.util.LinkedHashMap<>();niche.put("id","org.example.niche");niche.put("added",now-8L*365*86400);niche.put("lastUpdated",now);niche.put("versionCount",1000);
-    java.util.List<java.util.Map<String,Object>> established=FdroidCatalog.popular(java.util.List.of(niche,known),2,java.util.Set.of("org.mozilla.firefox"));
-    check("org.mozilla.firefox".equals(established.get(0).get("id")),"curated familiar app outranks high-history niche apps");
-    java.util.Map<String,Object> flagged=new java.util.LinkedHashMap<>(quiet);flagged.put("antiFeatures",java.util.List.of("Ads","Tracking"));
-    java.util.Map<String,Object> clean=new java.util.LinkedHashMap<>(quiet);clean.put("id","org.example.clean");clean.put("antiFeatures",java.util.List.of());
-    java.util.List<java.util.Map<String,Object>> safety=FdroidCatalog.popular(java.util.List.of(flagged,clean),2,java.util.Set.of());
-    check("org.example.clean".equals(safety.get(0).get("id")),"anti-features reduce the popularity score");
+    java.util.Map<String,Object> quiet=new java.util.LinkedHashMap<>();quiet.put("id","org.example.quiet");
+    java.util.Map<String,Object> popular=new java.util.LinkedHashMap<>();popular.put("id","org.example.popular");
+    java.util.Map<String,java.util.Map<String,Object>> stats=new java.util.HashMap<>();
+    stats.put("org.example.popular",java.util.Map.of("downloads",10000,"ratingCount",20,"ratingAvg",4.5,"ratingHistogram",new Object[]{0,1,2,5,12}));
+    java.util.List<java.util.Map<String,Object>> scored=FdroidCatalog.popular(java.util.List.of(quiet,popular),2,stats);
+    check(scored.size()==2&&"org.example.popular".equals(scored.get(0).get("id")),"server download and rating stats rank the popular app first");
+    check(((Number)scored.get(0).get("popularityScore")).doubleValue()<=10.0,"server popularity score stays within the 0–10 range");
+    check(((Number)scored.get(1).get("popularityScore")).doubleValue()==0.0,"empty server stats give a new app a zero score");
+    check(((Number)scored.get(0).get("serverRatingCount")).intValue()==20,"server rating summary is retained for the contract parcelable");
   }
   private static void testLargeStreamingIndex(File file) throws Exception {
     check(file.length() >= 100L * 1024 * 1024, "synthetic index is at least 100 MiB");

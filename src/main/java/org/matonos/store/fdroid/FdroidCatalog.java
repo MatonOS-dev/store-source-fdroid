@@ -27,37 +27,30 @@ final class FdroidCatalog {
     return result;
   }
 
-  /** F-Droid has no install counts or popularity rank: combine curation (0–6),
-   * release history (0–1.5), catalogue longevity (0–0.75), recent update (0–1),
-   * and a 0–2 anti-feature penalty. */
-  static List<Map<String,Object>> popular(List<Map<String,Object>> apps, int limit, java.util.Set<String> knownApps) {
+  /** Rank from server download counts (log scale) and community ratings. */
+  static List<Map<String,Object>> popular(List<Map<String,Object>> apps, int limit, Map<String,Map<String,Object>> serverStats) {
     if (limit <= 0) throw new IllegalArgumentException("limit must be positive");
-    long now = System.currentTimeMillis() / 1000L;
     List<Map<String,Object>> rows = new ArrayList<>();
     for (Map<String,Object> app : apps) {
       Map<String,Object> row = new LinkedHashMap<>(app);
-      long added = added(app.get("added"));
-      int count = app.get("versionCount") instanceof Number ? ((Number)app.get("versionCount")).intValue() : 1;
       String id = text(app.get("id")).toLowerCase(java.util.Locale.ROOT);
-      double known = isKnownApp(id, knownApps) ? 6.0 : 0.0;
-      double history = Math.min(1.5, Math.log1p(Math.max(0, count - 1)) * 0.55);
-      double longevity = added <= 0 ? 0 : Math.min(0.75, Math.max(0, (now - added) / (5.0 * 365 * 86400) * 0.75));
-      long updated = added(app.get("lastUpdated"));
-      double freshness = updated <= 0 ? 0 : Math.max(0, 1.0 - Math.max(0, now - updated) / (2.0 * 365 * 86400));
+      Map<String,Object> stats = serverStats.get(id);
+      if (stats == null) stats = java.util.Collections.emptyMap();
+      double downloads = Math.min(6.0, Math.log1p(Math.max(0, number(stats.get("downloads")))) * 0.75);
+      double ratingCount = Math.max(0, number(stats.get("ratingCount")));
+      double average = Math.max(0, Math.min(5, stats.get("ratingAvg") instanceof Number ? ((Number)stats.get("ratingAvg")).doubleValue() : 0));
+      Object[] histogram = stats.get("ratingHistogram") instanceof Object[] ? (Object[])stats.get("ratingHistogram") : new Object[]{0,0,0,0,0};
+      double ratingScore = ratingCount == 0 ? 0 : Math.min(3.0, (average / 5.0) * (1.0 + Math.log1p(ratingCount) / 5.0));
       Object anti = app.get("antiFeatures");
       int antiCount = anti instanceof List ? ((List<?>)anti).size() : 0;
       double penalty = Math.min(2.0, antiCount * 0.75);
-      double score = Math.round(Math.max(0, Math.min(10, known + history + longevity + freshness - penalty)) * 10.0) / 10.0;
+      double score = Math.round(Math.max(0, Math.min(10, downloads + ratingScore - penalty)) * 10.0) / 10.0;
+      row.put("serverRating", average); row.put("serverRatingCount", (int)ratingCount);
+      row.put("serverRatingHistogram", histogram);
       row.put("popularityScore", score); rows.add(row);
     }
     rows.sort((a,b) -> { int score = Double.compare(((Number)b.get("popularityScore")).doubleValue(), ((Number)a.get("popularityScore")).doubleValue()); return score != 0 ? score : text(a.get("id")).compareToIgnoreCase(text(b.get("id"))); });
     return new ArrayList<>(rows.subList(0, Math.min(limit, rows.size())));
-  }
-
-  private static boolean isKnownApp(String id, java.util.Set<String> knownApps) {
-    if (knownApps.contains(id)) return true;
-    for (String prefix : knownApps) if (prefix.endsWith("*") && id.startsWith(prefix.substring(0, prefix.length() - 1))) return true;
-    return false;
   }
 
   private static long added(Object value) {
@@ -65,6 +58,8 @@ final class FdroidCatalog {
     if (value instanceof String) try { return Long.parseLong((String)value); } catch (NumberFormatException ignored) { return 0; }
     return 0;
   }
+
+  private static long number(Object value) { return value instanceof Number ? ((Number)value).longValue() : 0; }
 
   private static String text(Object value) { return value == null ? "" : String.valueOf(value); }
 
