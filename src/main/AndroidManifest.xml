@@ -2,7 +2,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <application android:label="F-Droid source" android:allowBackup="false" android:usesCleartextTraffic="false">
-        <service android:name=".FdroidSourceService" android:exported="true" android:permission="org.matonos.permission.BIND_STORE_SOURCE">
+        <service android:name=".FdroidSourceService" android:icon="@drawable/ic_store_source" android:exported="true" android:permission="org.matonos.permission.BIND_STORE_SOURCE">
             <intent-filter><action android:name="org.matonos.store.SOURCE" /></intent-filter>
         </service>
     </application>
