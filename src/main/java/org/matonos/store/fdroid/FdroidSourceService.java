@@ -37,7 +37,10 @@ public final class FdroidSourceService extends Service {
 
   @Override public void onCreate() {
     super.onCreate(); repositories = new FdroidRepositories(this);
-    catalogueGeneration.set(getSharedPreferences("store-catalogue", MODE_PRIVATE).getLong("version",1));
+    android.content.SharedPreferences state=getSharedPreferences("store-catalogue", MODE_PRIVATE);
+    catalogueGeneration.set(state.getLong("version",1));
+    // The written file outlives this process; reuse it after a restart instead of refetching every repository.
+    catalogueFileVersion=state.getLong("fileVersion",-1);catalogueFileCheckedAt=state.getLong("fileCheckedAt",0);
     packageReceiver = new BroadcastReceiver() {
       @Override public void onReceive(android.content.Context context, Intent intent) { invalidateCatalogue(); }
     };
@@ -89,7 +92,7 @@ public final class FdroidSourceService extends Service {
         }
         if(!temp.renameTo(file)){Log.e(TAG,"Cannot publish catalogue file source="+getPackageName()+" temp="+temp+" target="+file);throw new IOException("Cannot publish F-Droid catalogue");}
         if(refreshExpired)invalidateCatalogue();
-        catalogueFile=file;catalogueFileVersion=catalogueGeneration.get();catalogueFileCheckedAt=now;
+        catalogueFile=file;catalogueFileVersion=catalogueGeneration.get();catalogueFileCheckedAt=now;getSharedPreferences("store-catalogue",MODE_PRIVATE).edit().putLong("fileVersion",catalogueFileVersion).putLong("fileCheckedAt",now).apply();
         return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY);
       });
     }
