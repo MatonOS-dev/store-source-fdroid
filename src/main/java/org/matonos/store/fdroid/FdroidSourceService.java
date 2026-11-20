@@ -188,7 +188,7 @@ public final class FdroidSourceService extends Service {
 
   private JSONObject catalogueRow(Map<String,Object> row) throws Exception {
     JSONObject value=new JSONObject();
-    for(String key:new String[]{"id","name","summary","icon","developer","installed","repo","versionName","packageName","added","badges","repoOptions"}) if(row.containsKey(key)) value.put(key,row.get(key));
+    for(String key:new String[]{"id","name","summary","icon","developer","installed","repo","versionName","packageName","added","badges","repoOptions"}) if(row.containsKey(key)) value.put(key,JSONObject.wrap(row.get(key)));
     value.put("repoLabel",row.getOrDefault("repoLabel",row.get("repo")));
     value.put("popularityScore",row.get("popularityScore") instanceof Number?((Number)row.get("popularityScore")).doubleValue():0.0);
     value.put("currentVersionName",row.get("currentVersionName")==null?JSONObject.NULL:row.get("currentVersionName"));
