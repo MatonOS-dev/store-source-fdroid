@@ -39,6 +39,7 @@ public final class FdroidIndexClientTest {
     java.util.Map<String, Object> parsed = client.parseIndex(fixture);
     java.util.Map<String, Object> app = client.detailsFromParsedIndex(parsed, "org.example.demo");
     check("Demo App".equals(app.get("name")), "parser name");
+    check("org.example.demo".equals(app.get("packageName")), "catalogue packageName is the Android package id");
     check("A small fixture".equals(app.get("summary")), "parser summary");
     check("https://f-droid.org/repo/icons/demo-640.png".equals(app.get("icon")), "icon chooses the highest source density meeting 2x row size instead of the undersized default");
     java.util.Map<String,Object> v2IconIndex = client.parseIndex(fixture.replace("\"icons-192\"", "\"iconv2\""));
